@@ -159,6 +159,14 @@ body { background: var(--paper); font-size: 15px; }
 .marketplace-assurances { display: flex; justify-content: center; gap: clamp(24px, 7vw, 110px); padding: 23px 5vw; border-top: 1px solid var(--line); background: #fff; color: #5e6e76; font-size: 12px; }
 .marketplace-assurances span { display: flex; align-items: center; gap: 8px; }
 .marketplace-assurances b { color: #344fa9; font-size: 11px; }
+.live-bid-ticker { position: relative; height: 112px; overflow: hidden; margin-top: 4px; }
+.live-bid-ticker::before, .live-bid-ticker::after { position: absolute; z-index: 1; right: 0; left: 0; height: 25px; content: ''; pointer-events: none; }
+.live-bid-ticker::before { top: 0; background: linear-gradient(to bottom, #fff, rgba(255,255,255,0)); }
+.live-bid-ticker::after { bottom: 0; background: linear-gradient(to top, #fff, rgba(255,255,255,0)); }
+.live-bid-track { animation: recent-bids-scroll 24s linear infinite; will-change: transform; }
+.live-bid-ticker:hover .live-bid-track, .live-bid-ticker:focus-within .live-bid-track { animation-play-state: paused; }
+.live-bid-track .bid-row { height: 56px; min-height: 56px; padding: 9px 0; }
+@keyframes recent-bids-scroll { to { transform: translateY(-50%); } }
 
 @media (max-width: 1100px) {
   .topbar { padding-right: 4%; padding-left: 4%; gap: 24px; }
@@ -222,4 +230,5 @@ body { background: var(--paper); font-size: 15px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .live-bid-track { animation: none !important; transform: none !important; }
 }

@@ -1,5 +1,5 @@
 import { pool, withTransaction } from './db.js';
-import { hashAuditEvent } from './domain.js';
+import { hashAuditEvent, pseudonym } from './domain.js';
 import { hashPassword } from './auth.js';
 
 type DemoArtwork = {
@@ -69,8 +69,53 @@ try {
         await client.query('UPDATE lots SET audit_count=1, audit_tip_hash=$1 WHERE id=$2', [eventHash, lotId]);
       }
     }
+    const featuredResult = await client.query("SELECT * FROM lots WHERE artwork->>'seedKey'='demo:van-gogh-bedroom' LIMIT 1 FOR UPDATE");
+    const featuredLot = featuredResult.rows[0];
+    if (featuredLot?.status === 'live' && new Date(featuredLot.ends_at) > new Date()) {
+      const existingBids = await client.query('SELECT 1 FROM bids WHERE lot_id=$1 LIMIT 1', [featuredLot.id]);
+      if (!existingBids.rowCount) {
+        const openingCents = Number(featuredLot.opening_bid_cents);
+        const incrementCents = Number(featuredLot.increment_cents);
+        const plannedBids = [
+          { bidderId: users[1].id, amountCents: openingCents },
+          { bidderId: users[2].id, amountCents: openingCents + incrementCents },
+          { bidderId: users[1].id, amountCents: openingCents + incrementCents * 2 },
+          { bidderId: users[2].id, amountCents: openingCents + incrementCents * 3 }
+        ];
+        for (const bidderId of new Set(plannedBids.map(bid => bid.bidderId))) {
+          const wallet = await client.query('SELECT COALESCE(sum(available_delta_cents),0)::bigint AS available FROM wallet_transactions WHERE user_id=$1', [bidderId]);
+          const required = Math.max(...plannedBids.filter(bid => bid.bidderId === bidderId).map(bid => bid.amountCents));
+          const available = Number(wallet.rows[0].available);
+          if (available < required) await client.query("INSERT INTO wallet_transactions(user_id, kind, available_delta_cents, committed_delta_cents, note) VALUES($1,'deposit',$2,0,'Complemento de saldo para lances de demonstração')", [bidderId, required - available]);
+        }
+        const lastEvent = await client.query('SELECT sequence, event_hash FROM audit_events WHERE lot_id=$1 ORDER BY sequence DESC LIMIT 1', [featuredLot.id]);
+        let sequence = Number(lastEvent.rows[0]?.sequence ?? 0);
+        let previousHash = lastEvent.rows[0]?.event_hash ?? 'GENESIS';
+        let previousBidderId: string | null = null;
+        let previousAmountCents = 0;
+        let currentLeaderId = '';
+        let currentAmountCents = 0;
+        const firstBidAt = Date.now() - 5 * 60 * 1000;
+        for (const [index, bid] of plannedBids.entries()) {
+          if (previousBidderId) await client.query("INSERT INTO wallet_transactions(user_id, lot_id, kind, available_delta_cents, committed_delta_cents, note) VALUES($1,$2,'release',$3,$4,'Lance de demonstração superado')", [previousBidderId, featuredLot.id, previousAmountCents, -previousAmountCents]);
+          await client.query("INSERT INTO wallet_transactions(user_id, lot_id, kind, available_delta_cents, committed_delta_cents, note) VALUES($1,$2,'reserve',$3,$4,'Lance de demonstração em disputa')", [bid.bidderId, featuredLot.id, -bid.amountCents, bid.amountCents]);
+          const createdAt = new Date(firstBidAt + index * 45 * 1000);
+          await client.query('INSERT INTO bids(lot_id, bidder_id, amount_cents, created_at) VALUES($1,$2,$3,$4)', [featuredLot.id, bid.bidderId, bid.amountCents, createdAt]);
+          const payload = { type: 'bid_placed', amountCents: bid.amountCents, bidder: pseudonym(bid.bidderId), createdAt: createdAt.toISOString(), demonstration: true };
+          const eventHash = hashAuditEvent(previousHash, payload);
+          sequence += 1;
+          await client.query('INSERT INTO audit_events(lot_id, sequence, event_type, payload, previous_hash, event_hash, created_at) VALUES($1,$2,$3,$4,$5,$6,$7)', [featuredLot.id, sequence, 'bid_placed', payload, previousHash, eventHash, createdAt]);
+          previousHash = eventHash;
+          previousBidderId = bid.bidderId;
+          previousAmountCents = bid.amountCents;
+          currentLeaderId = bid.bidderId;
+          currentAmountCents = bid.amountCents;
+        }
+        await client.query('UPDATE lots SET current_bid_cents=$1,current_leader_id=$2,audit_count=$3,audit_tip_hash=$4 WHERE id=$5', [currentAmountCents, currentLeaderId, sequence, previousHash, featuredLot.id]);
+      }
+    }
   });
-  console.log(`Catálogo de demonstração garantido: ${artworks.length} obras; lotes ao vivo, agendados e encerrados. Acessos de teste prontos para leiloeira e licitantes.`);
+  console.log(`Catálogo de demonstração garantido: ${artworks.length} obras e atividade inicial auditável no lote The Bedroom, se ainda estiver ao vivo e sem lances. Acessos de teste prontos para leiloeira e licitantes.`);
 } finally {
   await pool.end();
 }
