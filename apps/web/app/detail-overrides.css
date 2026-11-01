@@ -1,5 +1,1 @@
-.live-timing{border-top:1px solid var(--line);border-bottom:0;padding-bottom:12px}
-.countdown{font:600 17px 'DM Mono',monospace;letter-spacing:.8px;color:#5e7533}
-.lead-status{padding:10px 12px;margin:3px 0 17px;font-size:10px;line-height:1.55}
-.lead-winning{background:#eff4df;color:#5f7535}
-.lead-outbid{background:#f4f0df;color:#89743f}
+/* Styles unified in ./styles.css */

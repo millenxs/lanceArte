@@ -5,262 +5,2812 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? '/api';
-const SOCKET = process.env.NEXT_PUBLIC_SOCKET_URL ?? process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
-type User = { id: string; name: string; role: 'auctioneer' | 'bidder' };
-type Lot = { id: string; title: string; imageUrl?: string; artwork: any; openingBid: number; increment: number; startsAt: string; endsAt: string; status: string; currentBid: number | null; leader: string | null; sellerName: string; receiptToken?: string | null; isCurrentUserLeader?: boolean };
-type Bid = { bidder: string; amount: number; createdAt: string };
-type Item = { id: string; title: string; artist: string; date: string; imageUrl?: string | null; publicDomain: boolean; sourceUrl: string };
-type Flash = { kind: 'success' | 'error'; text: string } | null;
+const SOCKET =
+  process.env.NEXT_PUBLIC_SOCKET_URL ??
+  process.env.NEXT_PUBLIC_API_URL ??
+  'http://localhost:4000';
 
-const brl = (value?: number | null) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value ?? 0);
-const when = (value?: string) => value ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '—';
-const apiFetch = (path: string, init?: RequestInit) => fetch(`${API}${path}`, { ...init, credentials: 'include', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
+type User = {
+  id: string;
+  name: string;
+  role: 'auctioneer' | 'bidder';
+};
+
+type Lot = {
+  id: string;
+  title: string;
+  imageUrl?: string | null;
+  artwork: any;
+  openingBid: number;
+  increment: number;
+  startsAt: string;
+  endsAt: string;
+  status: 'live' | 'scheduled' | 'closed' | 'cancelled' | string;
+  currentBid: number | null;
+  leader: string | null;
+  sellerId?: string;
+  sellerName: string;
+  receiptToken?: string | null;
+  bidCount?: number;
+  auditCount?: number;
+  isCurrentUserLeader?: boolean;
+};
+
+type Bid = {
+  bidder: string;
+  amount: number;
+  createdAt: string;
+};
+
+type Item = {
+  id: string;
+  title: string;
+  artist: string;
+  date: string;
+  imageUrl?: string | null;
+  publicDomain: boolean;
+  sourceUrl: string;
+};
+
+type WalletTransaction = {
+  id: string;
+  lotId?: string | null;
+  lotTitle?: string | null;
+  kind: 'deposit' | 'reserve' | 'release' | 'settlement_debit' | 'settlement_credit' | string;
+  availableDelta: number;
+  committedDelta: number;
+  note: string;
+  createdAt: string;
+};
+
+type WalletData = {
+  user: { id: string; name: string };
+  available: number;
+  committed: number;
+  total: number;
+  transactions?: WalletTransaction[];
+};
+
+type Flash = {
+  kind: 'success' | 'error';
+  text: string;
+} | null;
+
+const brl = (value?: number | null) =>
+  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value ?? 0);
+
+const when = (value?: string) =>
+  value
+    ? new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(
+        new Date(value)
+      )
+    : '—';
+
+const whenFull = (value?: string) =>
+  value
+    ? new Intl.DateTimeFormat('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }).format(new Date(value))
+    : '—';
+
+const apiFetch = (path: string, init?: RequestInit) =>
+  fetch(`${API}${path}`, {
+    ...init,
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) }
+  });
+
+function formatRemaining(targetIso: string, nowMs: number): {
+  text: string;
+  urgent: boolean;
+  expired: boolean;
+} {
+  const diffSec = Math.max(0, Math.floor((new Date(targetIso).getTime() - nowMs) / 1000));
+  if (diffSec <= 0) return { text: '00h 00m 00s', urgent: false, expired: true };
+  const days = Math.floor(diffSec / 86400);
+  const hours = Math.floor((diffSec % 86400) / 3600);
+  const minutes = Math.floor((diffSec % 3600) / 60);
+  const seconds = diffSec % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const text =
+    days > 0
+      ? `${days}d ${pad(hours)}h ${pad(minutes)}m ${pad(seconds)}s`
+      : `${pad(hours)}h ${pad(minutes)}m ${pad(seconds)}s`;
+  return { text, urgent: diffSec <= 120, expired: false };
+}
+
+function toLocalInputValue(date: Date): string {
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
 
 function Status({ value }: { value: string }) {
-  const labels: Record<string, string> = { live: 'Ao vivo', scheduled: 'Agendado', closed: 'Encerrado', cancelled: 'Cancelado' };
-  return <span className={`status status-${value}`}><i />{labels[value] ?? value}</span>;
+  const labels: Record<string, string> = {
+    live: 'Ao vivo',
+    scheduled: 'Agendado',
+    closed: 'Encerrado',
+    cancelled: 'Cancelado'
+  };
+  return (
+    <span className={`status status-${value}`}>
+      <i />
+      {labels[value] ?? value}
+    </span>
+  );
 }
+
 function Money({ children, muted = false }: { children: React.ReactNode; muted?: boolean }) {
   return <span className={muted ? 'money muted' : 'money'}>{children}</span>;
 }
-function Artwork({ src, title, className = '' }: { src?: string | null; title: string; className?: string }) {
+
+function Artwork({
+  src,
+  title,
+  className = ''
+}: {
+  src?: string | null;
+  title: string;
+  className?: string;
+}) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [src]);
-  return <div className={`artwork ${className}`}>
-    {src && !failed ? <img src={src} alt={title} onError={() => setFailed(true)} /> : <div className="artwork-placeholder"><span>LA</span><small>{src ? 'Imagem indisponível · consulte o acervo' : 'Obra de arte'}</small></div>}
-    <span className="artwork-shade" />
-  </div>;
-}
-function LotCard({ lot }: { lot: Lot }) {
-  return <Link className="lot-card" href={`/lots/${lot.id}`}>
-    <Artwork src={lot.imageUrl} title={lot.title} />
-    <div className="lot-card-body">
-      <div className="lot-card-meta"><Status value={lot.status} /><span>{lot.status === 'live' ? 'Termina' : 'Início'} {when(lot.status === 'live' ? lot.endsAt : lot.startsAt)}</span></div>
-      <h3>{lot.title}</h3>
-      <p>{lot.artwork?.artist ?? lot.artwork?.artist_title ?? 'Coleção LanceArte'}</p>
-      <div className="lot-card-price"><span>{lot.status === 'live' ? 'Lance atual' : lot.status === 'closed' ? lot.currentBid === null ? 'Sem arremate' : 'Arrematado por' : 'Lance inicial'}</span><Money>{lot.currentBid === null && lot.status === 'closed' ? '—' : brl(lot.currentBid ?? lot.openingBid)}</Money></div>
-      <div className="lot-card-footer"><span>Incremento {brl(lot.increment)}</span><b>{lot.status === 'live' ? 'Dar lance' : lot.status === 'scheduled' ? 'Ver lote' : 'Ver resultado'} <span aria-hidden="true">→</span></b></div>
+  return (
+    <div className={`artwork ${className}`}>
+      {src && !failed ? (
+        <img src={src} alt={title} onError={() => setFailed(true)} />
+      ) : (
+        <div className="artwork-placeholder">
+          <span>LA</span>
+          <small>{src ? 'Imagem indisponível · consulte o acervo' : 'Obra catalogada'}</small>
+        </div>
+      )}
+      <span className="artwork-shade" />
     </div>
-  </Link>;
-}
-function LiveBidTicker({ bids }: { bids: Bid[] }) {
-  const recentBids = bids.slice(0, 8);
-  const loop = [...recentBids, ...recentBids];
-  return <div className="live-bid-ticker" aria-label="Lances recentes; lista em rolagem automática" aria-live="off">
-    <div className="live-bid-track">
-      {loop.map((bid, index) => <div className="bid-row" key={`${bid.createdAt}-${index}`} aria-hidden={index >= recentBids.length}>
-        <span className="avatar tiny-avatar">{bid.bidder.slice(-1)}</span>
-        <span><b>{bid.bidder}</b><small>{when(bid.createdAt)}</small></span>
-        <strong>{brl(bid.amount)}</strong>
-      </div>)}
-    </div>
-  </div>;
-}
-function ShellLayout({ children, user, onLogin, onLogout, theme, onToggleTheme }: { children: React.ReactNode; user: User | null; onLogin: () => void; onLogout: () => void; theme: 'light' | 'dark'; onToggleTheme: () => void }) {
-  const mark = <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path d="m8.2 6.4 4.2-4.2 10.1 10.1-4.2 4.2z" /><path d="m18.8 13.2-9.1 9.1" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" /><path d="M5.6 23.2h16v3.2h-16z" /></svg>;
-  return <>
-    <div className="auction-ribbon"><span><i />PREGÃO DIGITAL</span><b>Arte em disputa, em tempo real</b><span className="ribbon-note">Lances e saldos demonstrativos</span></div>
-    <header className="topbar">
-      <Link href="/" className="brand"><span className="brand-mark">{mark}</span><span>lance<span>arte</span></span></Link>
-      <nav className="main-nav"><Link href="/#auctions">Todos os lotes</Link><Link href="/#featured-auction">Pregão em destaque</Link>{user?.role === 'auctioneer' && <Link href="/console">Painel do leiloeiro</Link>}{user?.role === 'bidder' && <Link href="/wallet">Minha carteira</Link>}</nav>
-      <div className="account-area">
-        <button className="theme-toggle" type="button" onClick={onToggleTheme} aria-label={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'} aria-pressed={theme === 'dark'} title={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}><span aria-hidden="true">{theme === 'dark' ? '☼' : '☾'}</span><small>{theme === 'dark' ? 'Claro' : 'Escuro'}</small></button>
-        {user ? <><span className="user-chip"><span className="avatar">{user.name.slice(0, 1)}</span><span>{user.name}<small>{user.role === 'auctioneer' ? 'Leiloeiro' : 'Licitante'}</small></span></span><button className="button button-quiet compact" onClick={onLogout}>Sair</button></> : <button className="button button-dark compact" onClick={onLogin}>Entrar</button>}
-      </div>
-    </header>
-    <main>{children}</main>
-    <footer className="footer"><Link href="/" className="brand footer-brand"><span className="brand-mark">{mark}</span><span>lance<span>arte</span></span></Link><p>Arte encontra novos caminhos.</p><span>© 2026 LanceArte · Leilões de arte simulados</span></footer>
-  </>;
+  );
 }
 
-export function AppShell({ view, id }: { view: 'home' | 'console' | 'wallet' | 'lot' | 'audit' | 'receipt'; id?: string }) {
+function LotCard({ lot, nowMs }: { lot: Lot; nowMs: number }) {
+  const artist = lot.artwork?.artist ?? lot.artwork?.artist_title ?? 'Acervo LanceArte';
+  const year = lot.artwork?.date ?? lot.artwork?.date_display ?? '';
+  const remaining =
+    lot.status === 'live'
+      ? formatRemaining(lot.endsAt, nowMs)
+      : lot.status === 'scheduled'
+        ? formatRemaining(lot.startsAt, nowMs)
+        : null;
+  const bidCount = lot.bidCount ?? 0;
+
+  return (
+    <Link className={`lot-card lot-card-${lot.status}`} href={`/lots/${lot.id}`}>
+      <div className="lot-card-media">
+        <Artwork src={lot.imageUrl} title={lot.title} />
+        <div className="lot-card-badges">
+          <Status value={lot.status} />
+          <span className="lot-code-pill">Lote #{lot.id.slice(0, 5).toUpperCase()}</span>
+        </div>
+        {lot.status === 'live' && remaining && (
+          <div className={`lot-card-timer ${remaining.urgent ? 'timer-urgent' : ''}`}>
+            <span>⏱ Encerra em</span>
+            <strong>{remaining.text}</strong>
+          </div>
+        )}
+        {lot.status === 'scheduled' && (
+          <div className="lot-card-timer timer-scheduled">
+            <span>Abre em {when(lot.startsAt)}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="lot-card-body">
+        <div className="lot-card-artist">
+          <span>{artist}</span>
+          {year && <small>· {year}</small>}
+        </div>
+        <h3>{lot.title}</h3>
+
+        <div className="lot-card-pricing">
+          <div className="lot-card-price-main">
+            <span>
+              {lot.status === 'live'
+                ? lot.currentBid !== null
+                  ? 'Lance atual'
+                  : 'Lance inicial'
+                : lot.status === 'closed'
+                  ? lot.currentBid === null
+                    ? 'Encerrado'
+                    : 'Arrematado por'
+                  : 'Lance inicial'}
+            </span>
+            <Money muted={lot.status === 'closed' && lot.currentBid === null}>
+              {lot.currentBid === null && lot.status === 'closed'
+                ? 'Sem lances'
+                : brl(lot.currentBid ?? lot.openingBid)}
+            </Money>
+          </div>
+          <div className="lot-card-bid-meta">
+            <span className="bid-count-pill">
+              {bidCount === 0
+                ? 'Sem lances'
+                : `${bidCount} ${bidCount === 1 ? 'lance' : 'lances'}`}
+            </span>
+            <small>Inc. {brl(lot.increment)}</small>
+          </div>
+        </div>
+
+        <div className="lot-card-footer">
+          <span className="lot-card-submeta">
+            {lot.leader
+              ? `Líder: ${lot.leader}`
+              : `Leiloeiro: ${lot.sellerName || 'Acervo'}`}
+          </span>
+          <b className="lot-card-cta">
+            {lot.status === 'live'
+              ? 'Dar lance'
+              : lot.status === 'scheduled'
+                ? 'Ver lote'
+                : 'Ver resultado'}{' '}
+            <span aria-hidden="true">→</span>
+          </b>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function ShellLayout({
+  children,
+  user,
+  walletBalance,
+  view,
+  onLogin,
+  onLogout,
+  theme,
+  onToggleTheme
+}: {
+  children: React.ReactNode;
+  user: User | null;
+  walletBalance: number | null;
+  view: string;
+  onLogin: () => void;
+  onLogout: () => void;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
+}) {
+  const mark = (
+    <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+      <path d="m8.2 6.4 4.2-4.2 10.1 10.1-4.2 4.2z" />
+      <path
+        d="m18.8 13.2-9.1 9.1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+      <path d="M5.6 23.2h16v3.2h-16z" />
+    </svg>
+  );
+
+  return (
+    <>
+      <div className="auction-ribbon">
+        <div className="ribbon-inner">
+          <span className="ribbon-live">
+            <i />
+            CASA DE LEILÕES AO VIVO
+          </span>
+          <span className="ribbon-center">
+            Acervos integrados: Art Institute of Chicago · Projeto Portinari · LACMA
+          </span>
+          <span className="ribbon-note">
+            Auditoria pública SHA-256 · Lances e saldos demonstrativos
+          </span>
+        </div>
+      </div>
+
+      <header className="topbar">
+        <div className="topbar-inner">
+          <Link href="/" className="brand">
+            <span className="brand-mark">{mark}</span>
+            <span className="brand-text">
+              <strong>
+                lance<span>arte</span>
+              </strong>
+              <small>FINE ART AUCTIONS</small>
+            </span>
+          </Link>
+
+          <nav className="main-nav" aria-label="Navegação principal">
+            <Link href="/#auctions" className={view === 'home' ? 'active' : ''}>
+              Explorar Lotes
+            </Link>
+            <Link href="/#featured-auction">Pregão em Destaque</Link>
+            {user?.role === 'auctioneer' && (
+              <Link href="/console" className={`nav-role-link ${view === 'console' ? 'active' : ''}`}>
+                <span>Painel do Leiloeiro</span>
+                <ins>Vendedor</ins>
+              </Link>
+            )}
+            {user?.role === 'bidder' && (
+              <Link href="/wallet" className={`nav-role-link ${view === 'wallet' ? 'active' : ''}`}>
+                <span>Minha Carteira</span>
+                {walletBalance !== null && <ins>{brl(walletBalance)}</ins>}
+              </Link>
+            )}
+          </nav>
+
+          <div className="account-area">
+            <button
+              className="theme-toggle"
+              type="button"
+              onClick={onToggleTheme}
+              aria-label={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}
+              aria-pressed={theme === 'dark'}
+              title={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}
+            >
+              <span aria-hidden="true">{theme === 'dark' ? '☼' : '☾'}</span>
+              <small>{theme === 'dark' ? 'Claro' : 'Escuro'}</small>
+            </button>
+
+            {user ? (
+              <div className="account-logged">
+                {user.role === 'auctioneer' ? (
+                  <Link href="/console" className="header-quick-action">
+                    + Criar Lote
+                  </Link>
+                ) : (
+                  <Link href="/wallet" className="header-quick-action">
+                    + Depositar
+                  </Link>
+                )}
+                <span className="user-chip">
+                  <span className={`avatar role-${user.role}`}>{user.name.slice(0, 1)}</span>
+                  <span className="user-chip-copy">
+                    <b>{user.name}</b>
+                    <small>
+                      {user.role === 'auctioneer'
+                        ? 'Leiloeiro · Vendedor'
+                        : 'Licitante · Cliente'}
+                    </small>
+                  </span>
+                </span>
+                <button className="button button-quiet compact" onClick={onLogout}>
+                  Sair
+                </button>
+              </div>
+            ) : (
+              <button className="button button-primary compact" onClick={onLogin}>
+                Entrar / Criar conta
+              </button>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <main className="main-content">{children}</main>
+
+      <footer className="footer">
+        <div className="footer-inner">
+          <div className="footer-col">
+            <Link href="/" className="brand footer-brand">
+              <span className="brand-mark">{mark}</span>
+              <span className="brand-text">
+                <strong>
+                  lance<span>arte</span>
+                </strong>
+                <small>CASA DE LEILÕES ONLINE</small>
+              </span>
+            </Link>
+            <p>
+              Plataforma de leilões em tempo real com curadoria via APIs públicas de museus,
+              carteira com reserva automática de saldo, comprovante público de arremate e trilha de
+              auditoria imutável SHA-256.
+            </p>
+          </div>
+          <div className="footer-links">
+            <div>
+              <strong>Plataforma</strong>
+              <Link href="/#auctions">Vitrine de Lotes</Link>
+              <Link href="/#featured-auction">Lote em Destaque</Link>
+              <Link href="/console">Área do Leiloeiro</Link>
+              <Link href="/wallet">Carteira do Licitante</Link>
+            </div>
+            <div>
+              <strong>Regras &amp; Segurança</strong>
+              <span>Leiloeiro cria lotes · não dá lances</span>
+              <span>Licitante deposita e disputa ao vivo</span>
+              <span>Prorrogação +2 min no final (Anti-sniping)</span>
+              <span>Auditoria SHA-256 aberta sem login</span>
+            </div>
+          </div>
+        </div>
+        <div className="footer-bottom">
+          <span>© 2026 LanceArte · Todos os valores e depósitos são simulados para fins de avaliação técnica.</span>
+          <span>Art Institute of Chicago · Projeto Portinari · LACMA</span>
+        </div>
+      </footer>
+    </>
+  );
+}
+
+export function AppShell({
+  view,
+  id
+}: {
+  view: 'home' | 'console' | 'wallet' | 'lot' | 'audit' | 'receipt';
+  id?: string;
+}) {
   const [user, setUser] = useState<User | null>(null);
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [flash, setFlash] = useState<Flash>(null);
   const [refresh, setRefresh] = useState(0);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
-  const notify = useCallback((kind: 'success' | 'error', text: string) => { setFlash({ kind, text }); window.setTimeout(() => setFlash(null), 4500); }, []);
-  const authenticate = useCallback(async (mode: 'login' | 'register', credentials: { name?: string; email: string; password: string; role?: 'bidder' | 'auctioneer' }) => {
-    const response = await apiFetch(`/auth/${mode}`, { method: 'POST', body: JSON.stringify(credentials) });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error ?? 'Não foi possível acessar o acervo.');
-    setUser(data.user); setLoginOpen(false); setRefresh(value => value + 1); notify('success', `${mode === 'register' ? 'Perfil criado' : 'Bem-vinda(o) de volta'}, ${data.user.name}.`);
-  }, [notify]);
+
+  const notify = useCallback((kind: 'success' | 'error', text: string) => {
+    setFlash({ kind, text });
+    window.setTimeout(() => setFlash(null), 5000);
+  }, []);
+
+  const loadSession = useCallback(async () => {
+    try {
+      const r = await apiFetch('/auth/me');
+      const session = await r.json();
+      setUser(session.user ?? null);
+      if (session.user?.role === 'bidder') {
+        const w = await apiFetch('/wallet/me');
+        if (w.ok) {
+          const wData = await w.json();
+          setWalletBalance(wData.available);
+        }
+      } else {
+        setWalletBalance(null);
+      }
+    } catch {
+      setUser(null);
+      setWalletBalance(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSession();
+  }, [refresh, loadSession]);
+
+  const authenticate = useCallback(
+    async (
+      mode: 'login' | 'register',
+      credentials: {
+        name?: string;
+        email: string;
+        password: string;
+        role?: 'bidder' | 'auctioneer';
+      }
+    ) => {
+      const response = await apiFetch(`/auth/${mode}`, {
+        method: 'POST',
+        body: JSON.stringify(credentials)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'Não foi possível acessar o acervo.');
+      setUser(data.user);
+      setLoginOpen(false);
+      setRefresh(value => value + 1);
+      notify(
+        'success',
+        `${mode === 'register' ? 'Conta criada com sucesso' : 'Acesso confirmado'}, ${data.user.name} (${data.user.role === 'auctioneer' ? 'Leiloeiro' : 'Licitante'}).`
+      );
+    },
+    [notify]
+  );
+
   const logout = async () => {
     try {
       const response = await apiFetch('/auth/logout', { method: 'POST', body: JSON.stringify({}) });
       if (!response.ok) throw new Error('Não foi possível encerrar a sessão. Tente novamente.');
       const session = await apiFetch('/auth/me').then(result => result.json());
-      if (session.user) throw new Error('A sessão continua ativa. Atualize a página e tente sair novamente.');
+      if (session.user)
+        throw new Error('A sessão continua ativa. Atualize a página e tente sair novamente.');
       setUser(null);
+      setWalletBalance(null);
       setRefresh(value => value + 1);
-      notify('success', 'Você saiu da sua conta.');
+      notify('success', 'Sessão encerrada com segurança.');
     } catch (error: any) {
       notify('error', error.message ?? 'Não foi possível encerrar a sessão.');
     }
   };
 
   useEffect(() => {
-    apiFetch('/auth/me').then(r => r.json()).then(session => setUser(session.user)).catch(() => {});
-  }, [refresh]);
+    const saved = window.localStorage.getItem('lancearte-theme');
+    setTheme(
+      saved === 'dark' || saved === 'light'
+        ? saved
+        : window.matchMedia('(prefers-color-scheme: dark)').matches
+          ? 'dark'
+          : 'light'
+    );
+  }, []);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem('lancearte-theme');
-    setTheme(saved === 'dark' || saved === 'light' ? saved : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-  }, []);
-  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
-  const toggleTheme = () => setTheme(current => {
-    const next = current === 'dark' ? 'light' : 'dark';
-    window.localStorage.setItem('lancearte-theme', next);
-    return next;
-  });
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
 
-  return <ShellLayout user={user} onLogin={() => setLoginOpen(true)} onLogout={logout} theme={theme} onToggleTheme={toggleTheme}>
-    {flash && <div className={`flash flash-${flash.kind}`} role="status">{flash.text}<button onClick={() => setFlash(null)} aria-label="Fechar">×</button></div>}
-    {view === 'home' && <HomeView onLogin={() => setLoginOpen(true)} key={refresh} />}
-    {view === 'lot' && id && <LotView id={id} user={user} onLogin={() => setLoginOpen(true)} notify={notify} key={`${id}-${refresh}`} />}
-    {view === 'console' && <ConsoleView user={user} notify={notify} key={refresh} />}
-    {view === 'wallet' && <WalletView user={user} notify={notify} key={refresh} />}
-    {view === 'audit' && id && <AuditView id={id} />}
-    {view === 'receipt' && id && <ReceiptView token={id} />}
-    {loginOpen && <LoginModal onClose={() => setLoginOpen(false)} onAuthenticate={authenticate} />}
-  </ShellLayout>;
-}
+  const toggleTheme = () =>
+    setTheme(current => {
+      const next = current === 'dark' ? 'light' : 'dark';
+      window.localStorage.setItem('lancearte-theme', next);
+      return next;
+    });
 
-function LoginModal({ onClose, onAuthenticate }: { onClose: () => void; onAuthenticate: (mode: 'login' | 'register', credentials: { name?: string; email: string; password: string; role?: 'bidder' | 'auctioneer' }) => Promise<void> }) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [name, setName] = useState(''); const [email, setEmail] = useState(''); const [password, setPassword] = useState('');
-  const [role, setRole] = useState<'bidder' | 'auctioneer'>('bidder'); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  const demoAccounts = [
-    { label: 'Licitante', email: 'colecionador@lancearte.test', password: 'Galeria#2026' },
-    { label: 'Leiloeira', email: 'leiloeira@lancearte.test', password: 'Atelie#2026' }
-  ];
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError('');
-    try { await onAuthenticate(mode, { name, email, password, role }); }
-    catch (cause: any) { setError(cause.message ?? 'Não foi possível continuar. Confira os dados e tente novamente.'); }
-    finally { setBusy(false); }
-  }
-  return <div className="modal-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}>
-    <section className={`modal login-modal mode-${mode}`} role="dialog" aria-modal="true" aria-labelledby="access-title">
-      <button className="modal-close" onClick={onClose} aria-label="Fechar">×</button>
-      <div className="login-artwork"><img src="/api/images/2d484387-2509-5e8e-2c43-22f9981972eb" alt="Detalhe da obra Um domingo na Grande Jatte, de Georges Seurat" /><span>UMA VISITA COMEÇA POR AQUI</span><small>Georges Seurat · Art Institute of Chicago</small></div>
-      <div className="login-content">
-        <span className="eyebrow">Acesso ao acervo</span><h2 id="access-title">{mode === 'login' ? 'Entre na galeria.' : 'Abra seu lugar na galeria.'}</h2>
-        <p>{mode === 'login' ? 'Retome seus lances e acompanhe as obras que despertaram seu interesse.' : 'Crie um perfil para participar dos leilões ou montar seus próprios lotes.'}</p>
-        <div className="access-tabs" role="group" aria-label="Entrar ou criar perfil">
-          <button type="button" aria-pressed={mode === 'login'} className={mode === 'login' ? 'selected' : ''} onClick={() => { setMode('login'); setError(''); }}>Entrar</button>
-          <button type="button" aria-pressed={mode === 'register'} className={mode === 'register' ? 'selected' : ''} onClick={() => { setMode('register'); setError(''); }}>Criar perfil</button>
+  return (
+    <ShellLayout
+      user={user}
+      walletBalance={walletBalance}
+      view={view}
+      onLogin={() => setLoginOpen(true)}
+      onLogout={logout}
+      theme={theme}
+      onToggleTheme={toggleTheme}
+    >
+      {flash && (
+        <div className={`flash flash-${flash.kind}`} role="status">
+          <span>{flash.text}</span>
+          <button onClick={() => setFlash(null)} aria-label="Fechar aviso">
+            ×
+          </button>
         </div>
-        <form className="access-form" onSubmit={submit}>
-          {mode === 'register' && <label>Como podemos chamar você?<input autoComplete="name" value={name} onChange={event => setName(event.target.value)} minLength={2} maxLength={80} required placeholder="Seu nome" /></label>}
-          <label>Seu e-mail<input type="email" autoComplete="email" value={email} onChange={event => setEmail(event.target.value)} required placeholder="voce@exemplo.com" /></label>
-          <label>Senha<input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={event => setPassword(event.target.value)} minLength={mode === 'register' ? 10 : undefined} maxLength={128} required placeholder={mode === 'register' ? 'Pelo menos 10 caracteres' : 'Sua senha'} /></label>
-          {mode === 'register' && <fieldset className="role-choice"><legend>Como deseja participar?</legend><label className={role === 'bidder' ? 'chosen' : ''}><input type="radio" name="role" value="bidder" checked={role === 'bidder'} onChange={() => setRole('bidder')} /><span><b>Quero dar lances</b><small>Descubra obras e acompanhe os arremates.</small></span></label><label className={role === 'auctioneer' ? 'chosen' : ''}><input type="radio" name="role" value="auctioneer" checked={role === 'auctioneer'} onChange={() => setRole('auctioneer')} /><span><b>Quero oferecer obras</b><small>Monte lotes e acompanhe os resultados.</small></span></label></fieldset>}
-          {error && <div className="access-error" role="alert">{error}</div>}
-          <button className="button button-dark access-submit" disabled={busy}>{busy ? 'Preparando seu acesso…' : mode === 'login' ? 'Entrar no acervo' : 'Criar perfil e continuar'}</button>
-        </form>
-        {mode === 'login' && <div className="test-access"><span>Quer conhecer por dentro?</span>{demoAccounts.map(account => <button key={account.email} type="button" onClick={() => { setEmail(account.email); setPassword(account.password); setError(''); }}><b>{account.label}</b><small>{account.email}</small><small>Senha · {account.password}</small><i>Preencher acesso</i></button>)}</div>}
-        <small className="modal-note">Leilões e depósitos são simulados. Não há cobrança real.</small>
-      </div>
-    </section>
-  </div>;
+      )}
+      {view === 'home' && (
+        <HomeView user={user} onLogin={() => setLoginOpen(true)} key={refresh} />
+      )}
+      {view === 'lot' && id && (
+        <LotView
+          id={id}
+          user={user}
+          onLogin={() => setLoginOpen(true)}
+          notify={notify}
+          onWalletChange={loadSession}
+          key={`${id}-${refresh}`}
+        />
+      )}
+      {view === 'console' && (
+        <ConsoleView user={user} onLogin={() => setLoginOpen(true)} notify={notify} key={refresh} />
+      )}
+      {view === 'wallet' && (
+        <WalletView
+          user={user}
+          onLogin={() => setLoginOpen(true)}
+          notify={notify}
+          onWalletChange={loadSession}
+          key={refresh}
+        />
+      )}
+      {view === 'audit' && id && <AuditView id={id} />}
+      {view === 'receipt' && id && <ReceiptView token={id} />}
+      {loginOpen && (
+        <LoginModal onClose={() => setLoginOpen(false)} onAuthenticate={authenticate} />
+      )}
+    </ShellLayout>
+  );
 }
 
-function HomeView({ onLogin }: { onLogin: () => void }) {
-  const [lots, setLots] = useState<Lot[]>([]); const [filter, setFilter] = useState('all'); const [search, setSearch] = useState(''); const [loading, setLoading] = useState(true); const [error, setError] = useState(false); const [loadAttempt, setLoadAttempt] = useState(0);
-  useEffect(() => { setLoading(true); setError(false); apiFetch('/lots').then(r => { if (!r.ok) throw new Error('API indisponível'); return r.json(); }).then(data => setLots(Array.isArray(data) ? data : [])).catch(() => setError(true)).finally(() => setLoading(false)); }, [loadAttempt]);
-  const shown = lots.filter(lot => {
-    const matchesStatus = filter === 'all' ? lot.status !== 'cancelled' : lot.status === filter;
-    const searchableText = `${lot.title} ${lot.artwork?.artist ?? lot.artwork?.artist_title ?? ''}`.toLocaleLowerCase('pt-BR');
-    return matchesStatus && searchableText.includes(search.trim().toLocaleLowerCase('pt-BR'));
-  });
-  const liveCount = lots.filter(lot => lot.status === 'live').length;
-  const featuredLot = filter === 'all'
-    ? shown.find(lot => lot.status === 'live') ?? shown.find(lot => lot.status === 'scheduled')
-    : shown[0];
+function LoginModal({
+  onClose,
+  onAuthenticate
+}: {
+  onClose: () => void;
+  onAuthenticate: (
+    mode: 'login' | 'register',
+    credentials: {
+      name?: string;
+      email: string;
+      password: string;
+      role?: 'bidder' | 'auctioneer';
+    }
+  ) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState<'bidder' | 'auctioneer'>('bidder');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const demoAccounts = [
+    {
+      label: 'Licitante 1 (Cliente)',
+      roleTag: 'Dar lances e arrematar',
+      email: 'colecionador@lancearte.test',
+      password: 'Galeria#2026'
+    },
+    {
+      label: 'Licitante 2 (Disputa)',
+      roleTag: 'Testar disputa ao vivo',
+      email: 'segundo.licitante@lancearte.test',
+      password: 'Segundo#2026'
+    },
+    {
+      label: 'Leiloeira (Vendedora)',
+      roleTag: 'Criar e gerir lotes',
+      email: 'leiloeira@lancearte.test',
+      password: 'Atelie#2026'
+    }
+  ];
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await onAuthenticate(mode, { name, email, password, role });
+    } catch (cause: any) {
+      setError(cause.message ?? 'Não foi possível continuar. Confira os dados e tente novamente.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={event => event.target === event.currentTarget && onClose()}
+    >
+      <section
+        className={`modal login-modal mode-${mode}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="access-title"
+      >
+        <button className="modal-close" onClick={onClose} aria-label="Fechar">
+          ×
+        </button>
+
+        <div className="login-artwork">
+          <img
+            src="/api/images/2d484387-2509-5e8e-2c43-22f9981972eb"
+            alt="Um domingo na Grande Jatte, de Georges Seurat"
+          />
+          <div className="login-artwork-caption">
+            <span className="login-badge">CASA DE LEILÕES LANCEARTE</span>
+            <strong>Disputas ao vivo com transparência criptográfica.</strong>
+            <small>Georges Seurat · Art Institute of Chicago</small>
+          </div>
+        </div>
+
+        <div className="login-content">
+          <span className="eyebrow">ACESSO À PLATAFORMA</span>
+          <h2 id="access-title">
+            {mode === 'login' ? 'Entre na sala de leilões.' : 'Crie sua conta na plataforma.'}
+          </h2>
+          <p>
+            {mode === 'login'
+              ? 'Acesse como Licitante para depositar saldo e ofertar lances, ou como Leiloeiro para publicar e gerenciar lotes.'
+              : 'Escolha seu papel na plataforma: Licitante (cliente comprador) ou Leiloeiro (vendedor organizador).'}
+          </p>
+
+          <div className="access-tabs" role="group" aria-label="Entrar ou criar perfil">
+            <button
+              type="button"
+              aria-pressed={mode === 'login'}
+              className={mode === 'login' ? 'selected' : ''}
+              onClick={() => {
+                setMode('login');
+                setError('');
+              }}
+            >
+              Entrar na conta
+            </button>
+            <button
+              type="button"
+              aria-pressed={mode === 'register'}
+              className={mode === 'register' ? 'selected' : ''}
+              onClick={() => {
+                setMode('register');
+                setError('');
+              }}
+            >
+              Criar novo perfil
+            </button>
+          </div>
+
+          <form className="access-form" onSubmit={submit}>
+            {mode === 'register' && (
+              <label>
+                Nome completo
+                <input
+                  autoComplete="name"
+                  value={name}
+                  onChange={event => setName(event.target.value)}
+                  minLength={2}
+                  maxLength={80}
+                  required
+                  placeholder="Ex.: Ana Beatriz"
+                />
+              </label>
+            )}
+            <label>
+              E-mail
+              <input
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={event => setEmail(event.target.value)}
+                required
+                placeholder="voce@exemplo.com"
+              />
+            </label>
+            <label>
+              Senha
+              <input
+                type="password"
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                value={password}
+                onChange={event => setPassword(event.target.value)}
+                minLength={mode === 'register' ? 10 : undefined}
+                maxLength={128}
+                required
+                placeholder={mode === 'register' ? 'Mínimo de 10 caracteres' : 'Sua senha'}
+              />
+            </label>
+
+            {mode === 'register' && (
+              <fieldset className="role-choice">
+                <legend>Selecione seu papel na Casa de Leilões</legend>
+                <label className={role === 'bidder' ? 'chosen' : ''}>
+                  <input
+                    type="radio"
+                    name="role"
+                    value="bidder"
+                    checked={role === 'bidder'}
+                    onChange={() => setRole('bidder')}
+                  />
+                  <span>
+                    <b>Licitante (Cliente)</b>
+                    <small>
+                      Deposita saldo simulado na carteira, dá lances ao vivo e recebe comprovantes
+                      de arremate.
+                    </small>
+                  </span>
+                </label>
+                <label className={role === 'auctioneer' ? 'chosen' : ''}>
+                  <input
+                    type="radio"
+                    name="role"
+                    value="auctioneer"
+                    checked={role === 'auctioneer'}
+                    onChange={() => setRole('auctioneer')}
+                  />
+                  <span>
+                    <b>Leiloeiro (Vendedor)</b>
+                    <small>
+                      Busca obras na API pública, define lance inicial, incremento e horários. Não
+                      pode dar lances.
+                    </small>
+                  </span>
+                </label>
+              </fieldset>
+            )}
+
+            {error && (
+              <div className="access-error" role="alert">
+                {error}
+              </div>
+            )}
+
+            <button className="button button-primary access-submit" disabled={busy}>
+              {busy
+                ? 'Autenticando…'
+                : mode === 'login'
+                  ? 'Acessar plataforma'
+                  : 'Criar conta e continuar'}
+            </button>
+          </form>
+
+          {mode === 'login' && (
+            <div className="test-access">
+              <span>Acesso rápido para avaliação (clique para entrar ou preencher):</span>
+              <div className="test-access-grid">
+                {demoAccounts.map(account => (
+                  <button
+                    key={account.email}
+                    type="button"
+                    onClick={async () => {
+                      setEmail(account.email);
+                      setPassword(account.password);
+                      setError('');
+                      setBusy(true);
+                      try {
+                        await onAuthenticate('login', {
+                          email: account.email,
+                          password: account.password
+                        });
+                      } catch (cause: any) {
+                        setError(cause.message ?? 'Erro ao entrar com conta demo.');
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    <b>{account.label}</b>
+                    <small>{account.roleTag}</small>
+                    <code>{account.email}</code>
+                    <i>Entrar com 1 clique →</i>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <small className="modal-note">
+            Ambiente demonstrativo: todos os saldos e lances são simulados.
+          </small>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function HomeView({ user, onLogin }: { user: User | null; onLogin: () => void }) {
+  const [lots, setLots] = useState<Lot[]>([]);
+  const [filter, setFilter] = useState<'all' | 'live' | 'scheduled' | 'closed'>('all');
+  const [sortBy, setSortBy] = useState<'ending' | 'price-desc' | 'price-asc' | 'bids'>('ending');
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [nowMs, setNowMs] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(false);
+    apiFetch('/lots')
+      .then(r => {
+        if (!r.ok) throw new Error('API indisponível');
+        return r.json();
+      })
+      .then(data => setLots(Array.isArray(data) ? data : []))
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  }, [loadAttempt]);
+
+  const activeLots = useMemo(() => lots.filter(lot => lot.status !== 'cancelled'), [lots]);
+
+  const shown = useMemo(() => {
+    const filtered = activeLots.filter(lot => {
+      const matchesStatus = filter === 'all' ? true : lot.status === filter;
+      const searchableText =
+        `${lot.title} ${lot.artwork?.artist ?? lot.artwork?.artist_title ?? ''} ${lot.artwork?.date ?? ''}`.toLocaleLowerCase(
+          'pt-BR'
+        );
+      return matchesStatus && searchableText.includes(search.trim().toLocaleLowerCase('pt-BR'));
+    });
+
+    return [...filtered].sort((a, b) => {
+      if (sortBy === 'price-desc') {
+        return (b.currentBid ?? b.openingBid) - (a.currentBid ?? a.openingBid);
+      }
+      if (sortBy === 'price-asc') {
+        return (a.currentBid ?? a.openingBid) - (b.currentBid ?? b.openingBid);
+      }
+      if (sortBy === 'bids') {
+        return (b.bidCount ?? 0) - (a.bidCount ?? 0);
+      }
+      const order = (s: string) => (s === 'live' ? 0 : s === 'scheduled' ? 1 : 2);
+      if (order(a.status) !== order(b.status)) return order(a.status) - order(b.status);
+      return new Date(a.endsAt).getTime() - new Date(b.endsAt).getTime();
+    });
+  }, [activeLots, filter, search, sortBy]);
+
+  const liveCount = activeLots.filter(lot => lot.status === 'live').length;
+  const scheduledCount = activeLots.filter(lot => lot.status === 'scheduled').length;
+  const closedCount = activeLots.filter(lot => lot.status === 'closed').length;
+
+  const featuredLot = useMemo(() => {
+    const liveWithBids = activeLots.find(l => l.status === 'live' && (l.bidCount ?? 0) > 0);
+    return (
+      liveWithBids ??
+      activeLots.find(l => l.status === 'live') ??
+      activeLots.find(l => l.status === 'scheduled') ??
+      activeLots[0]
+    );
+  }, [activeLots]);
+
+  const featuredRemaining = featuredLot
+    ? featuredLot.status === 'live'
+      ? formatRemaining(featuredLot.endsAt, nowMs)
+      : featuredLot.status === 'scheduled'
+        ? formatRemaining(featuredLot.startsAt, nowMs)
+        : null
+    : null;
+
   const categories = [
-    ['all', 'Todos os lotes', lots.filter(lot => lot.status !== 'cancelled').length],
-    ['live', 'Ao vivo', liveCount],
-    ['scheduled', 'Em breve', lots.filter(lot => lot.status === 'scheduled').length],
-    ['closed', 'Encerrados', lots.filter(lot => lot.status === 'closed').length]
+    ['all', 'Todos os lotes', activeLots.length],
+    ['live', 'Ao vivo agora', liveCount],
+    ['scheduled', 'Próximos pregões', scheduledCount],
+    ['closed', 'Encerrados', closedCount]
   ] as const;
-  return <>
-    <nav className="auction-categories" aria-label="Categorias de leilões">
-      {categories.map(([value, label, count]) => <button key={value} type="button" className={filter === value ? 'selected' : ''} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}<span>{count}</span></button>)}
-    </nav>
-    {featuredLot && <section className="featured-auction" id="featured-auction" aria-label="Leilão em destaque">
-      <div className="featured-art"><Artwork src={featuredLot.imageUrl} title={featuredLot.title} /></div>
-      <div className="featured-copy">
-        <div className="featured-kicker"><Status value={featuredLot.status} /><span>{featuredLot.status === 'live' ? 'Pregão em andamento' : featuredLot.status === 'scheduled' ? 'Próximo pregão' : 'Leilão encerrado'}</span></div>
-        <h2>{featuredLot.title}</h2>
-        <p className="featured-artist">{featuredLot.artwork?.artist ?? featuredLot.artwork?.artist_title ?? 'Acervo LanceArte'}{(featuredLot.artwork?.date ?? featuredLot.artwork?.date_display) ? ` · ${featuredLot.artwork?.date ?? featuredLot.artwork?.date_display}` : ''}</p>
-        <div className="featured-price"><span>{featuredLot.status === 'live' ? 'Lance atual' : featuredLot.status === 'closed' ? featuredLot.currentBid === null ? 'Sem arremate' : 'Arrematado por' : 'Lance inicial'}</span><strong>{featuredLot.currentBid === null && featuredLot.status === 'closed' ? '—' : brl(featuredLot.currentBid ?? featuredLot.openingBid)}</strong></div>
-        <div className="featured-facts"><div><span>{featuredLot.status === 'live' ? 'Próximo lance' : featuredLot.status === 'closed' ? 'Encerrado em' : 'Abertura'}</span><strong>{featuredLot.status === 'live' ? brl(featuredLot.currentBid === null ? featuredLot.openingBid : featuredLot.currentBid + featuredLot.increment) : when(featuredLot.status === 'closed' ? featuredLot.endsAt : featuredLot.startsAt)}</strong></div><div><span>{featuredLot.status === 'live' ? 'Encerra' : 'Incremento mínimo'}</span><strong>{featuredLot.status === 'live' ? when(featuredLot.endsAt) : brl(featuredLot.increment)}</strong></div></div>
-        <div className="featured-actions"><Link className="button button-dark" href={`/lots/${featuredLot.id}`}>{featuredLot.status === 'live' ? 'Dar lance' : featuredLot.status === 'closed' ? 'Ver resultado' : 'Ver lote'} <span>↗</span></Link></div>
+
+  return (
+    <>
+      <nav className="auction-categories" aria-label="Categorias de leilões">
+        <div className="categories-inner">
+          <div className="category-tabs">
+            {categories.map(([value, label, count]) => (
+              <button
+                key={value}
+                type="button"
+                className={filter === value ? 'selected' : ''}
+                aria-pressed={filter === value}
+                onClick={() => setFilter(value)}
+              >
+                {value === 'live' && <i className="tab-live-dot" />}
+                {label}
+                <span>{count}</span>
+              </button>
+            ))}
+          </div>
+          <div className="category-assurances">
+            <span>✓ Curadoria de APIs Públicas</span>
+            <span>✓ Reserva de Carteira</span>
+            <span>✓ Auditoria SHA-256</span>
+          </div>
+        </div>
+      </nav>
+
+      <div className="home-container">
+        {featuredLot && (
+          <section
+            className="featured-auction"
+            id="featured-auction"
+            aria-label="Leilão em destaque"
+          >
+            <div className="featured-art">
+              <Artwork src={featuredLot.imageUrl} title={featuredLot.title} />
+              <div className="featured-art-overlays">
+                <span className="featured-lot-badge">
+                  LOTE EM DESTAQUE #{featuredLot.id.slice(0, 6).toUpperCase()}
+                </span>
+                <span className="featured-source-badge">
+                  {featuredLot.artwork?.source ?? 'Art Institute of Chicago'}
+                </span>
+              </div>
+            </div>
+
+            <div className="featured-copy">
+              <div className="featured-kicker">
+                <Status value={featuredLot.status} />
+                <span>
+                  {featuredLot.status === 'live'
+                    ? 'Pregão aberto para lances ao vivo'
+                    : featuredLot.status === 'scheduled'
+                      ? 'Lote agendado para abertura'
+                      : 'Pregão finalizado'}
+                </span>
+              </div>
+
+              <h2>{featuredLot.title}</h2>
+              <p className="featured-artist">
+                <strong>
+                  {featuredLot.artwork?.artist ??
+                    featuredLot.artwork?.artist_title ??
+                    'Acervo LanceArte'}
+                </strong>
+                {(featuredLot.artwork?.date ?? featuredLot.artwork?.date_display)
+                  ? ` · ${featuredLot.artwork?.date ?? featuredLot.artwork?.date_display}`
+                  : ''}
+                <span> · Leiloeiro: {featuredLot.sellerName}</span>
+              </p>
+
+              <div className="featured-bid-box">
+                <div className="featured-price-col">
+                  <span>
+                    {featuredLot.status === 'live'
+                      ? featuredLot.currentBid !== null
+                        ? 'LANCE ATUAL'
+                        : 'LANCE INICIAL'
+                      : featuredLot.status === 'closed'
+                        ? featuredLot.currentBid === null
+                          ? 'RESULTADO'
+                          : 'ARREMATADO POR'
+                        : 'LANCE INICIAL'}
+                  </span>
+                  <strong>
+                    {featuredLot.currentBid === null && featuredLot.status === 'closed'
+                      ? 'Sem arremate'
+                      : brl(featuredLot.currentBid ?? featuredLot.openingBid)}
+                  </strong>
+                  <small>
+                    {featuredLot.leader
+                      ? `Na liderança: ${featuredLot.leader}`
+                      : `Lance mínimo inicial: ${brl(featuredLot.openingBid)}`}
+                  </small>
+                </div>
+
+                <div className="featured-timer-col">
+                  <span>
+                    {featuredLot.status === 'live'
+                      ? 'TEMPO RESTANTE'
+                      : featuredLot.status === 'scheduled'
+                        ? 'ABRE EM'
+                        : 'ENCERRADO EM'}
+                  </span>
+                  <strong className={featuredRemaining?.urgent ? 'urgent-text' : ''}>
+                    {featuredRemaining ? featuredRemaining.text : when(featuredLot.endsAt)}
+                  </strong>
+                  <small>
+                    {featuredLot.bidCount ?? 0}{' '}
+                    {(featuredLot.bidCount ?? 0) === 1 ? 'lance registrado' : 'lances registrados'}{' '}
+                    · Inc. {brl(featuredLot.increment)}
+                  </small>
+                </div>
+              </div>
+
+              <div className="featured-facts">
+                <div>
+                  <span>
+                    {featuredLot.status === 'live' ? 'Próximo lance mínimo' : 'Abertura do lote'}
+                  </span>
+                  <strong>
+                    {featuredLot.status === 'live'
+                      ? brl(
+                          featuredLot.currentBid === null
+                            ? featuredLot.openingBid
+                            : featuredLot.currentBid + featuredLot.increment
+                        )
+                      : when(featuredLot.startsAt)}
+                  </strong>
+                </div>
+                <div>
+                  <span>
+                    {featuredLot.status === 'live' ? 'Fechamento previsto' : 'Incremento mínimo'}
+                  </span>
+                  <strong>
+                    {featuredLot.status === 'live'
+                      ? when(featuredLot.endsAt)
+                      : brl(featuredLot.increment)}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="featured-actions">
+                <Link className="button button-primary" href={`/lots/${featuredLot.id}`}>
+                  {featuredLot.status === 'live'
+                    ? 'Entrar na Sala de Lances'
+                    : featuredLot.status === 'closed'
+                      ? 'Ver Resultado e Histórico'
+                      : 'Acompanhar Lote'}{' '}
+                  <span aria-hidden="true">→</span>
+                </Link>
+                <Link className="button button-outline" href={`/audit/${featuredLot.id}`}>
+                  Auditar SHA-256 ↗
+                </Link>
+              </div>
+            </div>
+          </section>
+        )}
+
+        <section className="auction-section" id="auctions">
+          <div className="catalog-header">
+            <div className="catalog-title-group">
+              <span className="eyebrow">CATÁLOGO OFICIAL · CURADORIA PÚBLICA</span>
+              <h1>Lotes em disputa &amp; próximos pregões</h1>
+              <p>
+                Exibindo <b>{shown.length}</b>{' '}
+                {shown.length === 1 ? 'lote catalogado' : 'lotes catalogados'} · Atualização em
+                tempo real
+              </p>
+            </div>
+
+            <div className="catalog-controls">
+              <label className="gallery-search">
+                <span aria-hidden="true">⌕</span>
+                <input
+                  type="search"
+                  aria-label="Buscar obra ou artista"
+                  placeholder="Buscar por obra, artista ou período…"
+                  value={search}
+                  onChange={event => setSearch(event.target.value)}
+                />
+                {search && (
+                  <button
+                    type="button"
+                    className="search-clear"
+                    onClick={() => setSearch('')}
+                    aria-label="Limpar busca"
+                  >
+                    ×
+                  </button>
+                )}
+              </label>
+
+              <label className="catalog-sort">
+                <span>Ordenar:</span>
+                <select
+                  value={sortBy}
+                  onChange={e => setSortBy(e.target.value as typeof sortBy)}
+                  aria-label="Ordenar lotes"
+                >
+                  <option value="ending">Encerrando mais cedo</option>
+                  <option value="bids">Mais disputados (nº de lances)</option>
+                  <option value="price-desc">Maior valor de lance</option>
+                  <option value="price-asc">Menor valor de lance</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="empty-state">
+              <span className="loader" />
+              <b>Consultando catálogo de lotes…</b>
+              <span>Sincronizando pregões e cotações em tempo real.</span>
+            </div>
+          ) : error ? (
+            <div className="empty-state">
+              <span className="empty-icon">⌁</span>
+              <b>Não foi possível carregar os leilões.</b>
+              <span>
+                A conexão com a API não respondeu. Verifique se o servidor está ativo e tente
+                novamente.
+              </span>
+              <button
+                className="button button-outline"
+                onClick={() => setLoadAttempt(value => value + 1)}
+              >
+                Tentar novamente ↻
+              </button>
+            </div>
+          ) : shown.length ? (
+            <div className="lot-grid">
+              {shown.map(lot => (
+                <LotCard lot={lot} nowMs={nowMs} key={lot.id} />
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state">
+              <span className="empty-icon">◇</span>
+              <b>Nenhum lote encontrado para este filtro.</b>
+              <span>
+                Experimente limpar o campo de busca ou alternar entre as categorias de lotes.
+              </span>
+              <div className="empty-actions">
+                <button
+                  className="button button-outline"
+                  onClick={() => {
+                    setFilter('all');
+                    setSearch('');
+                  }}
+                >
+                  Mostrar todos os lotes
+                </button>
+                {!user && (
+                  <button className="button button-primary" onClick={onLogin}>
+                    Entrar na plataforma
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="how-it-works" aria-label="Como funciona a casa de leilões">
+          <div className="how-header">
+            <div>
+              <span className="eyebrow">ARQUITETURA &amp; TRANSPARÊNCIA</span>
+              <h2>Como funcionam os pregões na LanceArte</h2>
+            </div>
+            {!user && (
+              <button className="button button-outline" onClick={onLogin}>
+                Experimentar com conta de teste →
+              </button>
+            )}
+          </div>
+          <div className="how-grid">
+            <article className="how-card">
+              <span className="how-step">01 · LEILOEIRO (VENDEDOR)</span>
+              <h3>Curadoria em API Pública</h3>
+              <p>
+                O leiloeiro pesquisa obras diretamente na API do Art Institute of Chicago, Projeto
+                Portinari e LACMA, definindo lance inicial, incremento mínimo e janela de início e
+                encerramento. Leiloeiros gerenciam seus lotes e não podem dar lances.
+              </p>
+            </article>
+            <article className="how-card">
+              <span className="how-step">02 · LICITANTE (CLIENTE)</span>
+              <h3>Carteira Simulada &amp; Lances Ao Vivo</h3>
+              <p>
+                O licitante deposita saldo simulado na carteira e disputa lotes em tempo real via
+                WebSockets. O lance vencedor fica reservado no saldo comprometido e libera
+                imediatamente o saldo do licitante anterior. Lances nos 2 minutos finais prorrogam
+                o pregão.
+              </p>
+            </article>
+            <article className="how-card">
+              <span className="how-step">03 · AUDITORIA &amp; ARREMATE</span>
+              <h3>Comprovante &amp; Cadeia SHA-256</h3>
+              <p>
+                Ao encerrar o lote, o vencedor recebe um comprovante oficial compartilhável por
+                link. Qualquer pessoa, mesmo sem login, pode auditar todos os eventos do lote e
+                validar matematicamente a cadeia de hashes SHA-256.
+              </p>
+            </article>
+          </div>
+        </section>
       </div>
-    </section>}
-    <section className="auction-section" id="auctions">
-      <div className="catalog-heading"><div><span className="eyebrow">ACERVO LANCEARTE</span><h1>Lotes em destaque &amp; disputa</h1><p>{shown.length} {shown.length === 1 ? 'lote no acervo' : 'lotes no acervo'}</p></div><label className="gallery-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="Buscar obra ou artista" placeholder="Buscar obra ou artista" value={search} onChange={event => setSearch(event.target.value)} /><kbd>⌕</kbd></label></div>
-      {loading ? <div className="empty-state"><span className="loader" />Carregando os lotes…</div> : error ? <div className="empty-state"><span className="empty-icon">⌁</span><b>Não foi possível carregar os leilões.</b><span>A conexão com a plataforma não respondeu. Verifique se a API está disponível e tente novamente.</span><button className="button button-outline" onClick={() => setLoadAttempt(value => value + 1)}>Tentar novamente ↻</button></div> : shown.length ? <div className="lot-grid">{shown.map(lot => <LotCard lot={lot} key={lot.id} />)}</div> : <div className="empty-state"><span className="empty-icon">◇</span><b>Nenhum lote por aqui ainda.</b><span>Os próximos leilões aparecem nesta galeria assim que forem publicados.</span><button className="button button-outline" onClick={onLogin}>Acessar o acervo</button></div>}
+    </>
+  );
+}
+
+function LotView({
+  id,
+  user,
+  onLogin,
+  notify,
+  onWalletChange
+}: {
+  id: string;
+  user: User | null;
+  onLogin: () => void;
+  notify: (kind: 'success' | 'error', text: string) => void;
+  onWalletChange: () => void;
+}) {
+  const [lot, setLot] = useState<Lot | null>(null);
+  const [bids, setBids] = useState<Bid[]>([]);
+  const [wallet, setWallet] = useState<WalletData | null>(null);
+  const [amount, setAmount] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [clock, setClock] = useState(Date.now());
+
+  const load = useCallback(async () => {
+    const [lotResponse, bidResponse] = await Promise.all([
+      apiFetch(`/lots/${id}`),
+      apiFetch(`/lots/${id}/bids`)
+    ]);
+    const lotData = await lotResponse.json();
+    if (lotResponse.ok) setLot(lotData);
+    if (bidResponse.ok) setBids(await bidResponse.json());
+  }, [id]);
+
+  const loadBidderWallet = useCallback(async () => {
+    if (user?.role !== 'bidder') {
+      setWallet(null);
+      return;
+    }
+    const r = await apiFetch('/wallet/me');
+    if (r.ok) setWallet(await r.json());
+  }, [user]);
+
+  useEffect(() => {
+    load().catch(() => notify('error', 'Não foi possível carregar este lote.'));
+  }, [load, notify]);
+
+  useEffect(() => {
+    loadBidderWallet();
+  }, [loadBidderWallet]);
+
+  useEffect(() => {
+    const channel: Socket = io(SOCKET, { withCredentials: true });
+    channel.emit('lot:join', id);
+    channel.on('lot:bid', () => {
+      load();
+      loadBidderWallet();
+      onWalletChange();
+    });
+    channel.on('lot:live', () => {
+      load();
+    });
+    channel.on('lot:closed', () => {
+      load();
+      loadBidderWallet();
+      onWalletChange();
+    });
+    return () => {
+      channel.disconnect();
+    };
+  }, [id, load, loadBidderWallet, onWalletChange]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!lot || lot.status !== 'live') return;
+    const timeout = window.setTimeout(
+      () => load(),
+      Math.max(0, new Date(lot.endsAt).getTime() - Date.now() + 350)
+    );
+    return () => window.clearTimeout(timeout);
+  }, [lot?.status, lot?.endsAt, load]);
+
+  const minimum = lot ? (lot.currentBid ?? lot.openingBid - lot.increment) + lot.increment : 0;
+
+  const submitBidAmount = async (bidValue: number) => {
+    if (!user) return onLogin();
+    if (user.role === 'auctioneer') {
+      return notify('error', 'Perfis de leiloeiro não podem ofertar lances.');
+    }
+    setBusy(true);
+    try {
+      const response = await apiFetch(`/lots/${id}/bids`, {
+        method: 'POST',
+        body: JSON.stringify({ amount: bidValue })
+      });
+      const data = await response.json();
+      if (!response.ok) return notify('error', data.error);
+      setAmount('');
+      notify(
+        'success',
+        data.extended
+          ? `Lance de ${brl(bidValue)} confirmado! Como faltavam menos de 2 minutos, o horário foi prorrogado.`
+          : `Lance de ${brl(bidValue)} confirmado! Você assumiu a liderança do lote.`
+      );
+      await Promise.all([load(), loadBidderWallet()]);
+      onWalletChange();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancelLot = async () => {
+    if (!lot) return;
+    setCancelling(true);
+    try {
+      const response = await apiFetch(`/lots/${lot.id}/cancel`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) {
+        notify('error', data.error ?? 'Não foi possível cancelar o lote.');
+      } else {
+        notify('success', 'Lote cancelado com sucesso.');
+        window.location.href = '/console';
+      }
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  if (!lot) {
+    return (
+      <div className="page-loader">
+        <span className="loader" />
+        <span>Abrindo sala de leilão…</span>
+      </div>
+    );
+  }
+
+  const remaining =
+    lot.status === 'live'
+      ? formatRemaining(lot.endsAt, clock)
+      : lot.status === 'scheduled'
+        ? formatRemaining(lot.startsAt, clock)
+        : null;
+
+  const quickAmounts = [minimum, minimum + lot.increment, minimum + lot.increment * 2];
+  const artist = lot.artwork?.artist ?? lot.artwork?.artist_title ?? 'Autoria desconhecida';
+  const year = lot.artwork?.date ?? lot.artwork?.date_display ?? 'Data não informada';
+  const sourceName =
+    lot.artwork?.source ??
+    (lot.artwork?.sourceUrl?.includes('portinari')
+      ? 'Projeto Portinari'
+      : lot.artwork?.sourceUrl?.includes('lacma')
+        ? 'Los Angeles County Museum of Art'
+        : 'Art Institute of Chicago');
+
+  return (
+    <section className="detail-page">
+      <div className="detail-topbar">
+        <nav className="breadcrumb" aria-label="Navegação estrutural">
+          <Link href="/">← Voltar à Vitrine</Link>
+          <span>/</span>
+          <span>Lote #{lot.id.slice(0, 6).toUpperCase()}</span>
+          <span>/</span>
+          <b>{lot.title}</b>
+        </nav>
+        <div className="detail-top-actions">
+          <Link className="top-action-pill" href={`/audit/${lot.id}`}>
+            ✓ Auditoria Pública SHA-256 ↗
+          </Link>
+          {lot.receiptToken && (
+            <Link className="top-action-pill highlight" href={`/receipt/${lot.receiptToken}`}>
+              ◇ Comprovante de Arremate ↗
+            </Link>
+          )}
+        </div>
+      </div>
+
+      <div className="detail-grid">
+        {/* LEFT COLUMN: ARTWORK SHOWCASE & PROVENANCE */}
+        <div className="detail-left">
+          <div className="detail-art-frame">
+            <Artwork src={lot.imageUrl} title={lot.title} className="detail-art" />
+          </div>
+
+          <div className="catalog-sheet">
+            <div className="sheet-header">
+              <div>
+                <span className="eyebrow">FICHA CATALOGRÁFICA DA OBRA</span>
+                <h2>Especificações &amp; Proveniência</h2>
+              </div>
+              {lot.artwork?.sourceUrl && (
+                <a
+                  href={lot.artwork.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="button button-outline compact"
+                >
+                  Ver registro na API / Museu ↗
+                </a>
+              )}
+            </div>
+
+            <div className="specs-grid">
+              <div className="spec-item">
+                <span>Artista / Autoria</span>
+                <strong>{artist}</strong>
+              </div>
+              <div className="spec-item">
+                <span>Período / Data</span>
+                <strong>{year}</strong>
+              </div>
+              <div className="spec-item">
+                <span>Acervo de Origem (API)</span>
+                <strong>{sourceName}</strong>
+              </div>
+              <div className="spec-item">
+                <span>Licença / Acervo</span>
+                <strong>
+                  {lot.artwork?.publicDomain ? 'Domínio Público' : 'Acervo Institucional'}
+                </strong>
+              </div>
+              <div className="spec-item">
+                <span>Leiloeiro Responsável</span>
+                <strong>{lot.sellerName}</strong>
+              </div>
+              <div className="spec-item">
+                <span>Identificador do Lote</span>
+                <strong>#{lot.id.slice(0, 8).toUpperCase()}</strong>
+              </div>
+            </div>
+
+            <div className="audit-assurance-card">
+              <div className="assurance-icon">✓</div>
+              <div className="assurance-copy">
+                <b>Integridade de Lances Auditável Sem Login</b>
+                <p>
+                  Cada lance ou mudança de estado deste lote gera um evento imutável encadeado via
+                  SHA-256 no banco de dados. Qualquer visitante pode verificar que o histórico não
+                  sofreu adulteração.
+                </p>
+              </div>
+              <Link href={`/audit/${lot.id}`} className="button button-outline compact">
+                Auditar lote ↗
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT COLUMN: STICKY LIVE AUCTION CONSOLE */}
+        <div className="detail-right">
+          <div className="bidding-console">
+            <div className="console-status-bar">
+              <div className="detail-overline">
+                <Status value={lot.status} />
+                <span className="lot-number-tag">LOTE #{lot.id.slice(0, 6).toUpperCase()}</span>
+              </div>
+
+              {lot.status === 'live' && remaining && (
+                <div className={`live-countdown-pill ${remaining.urgent ? 'urgent' : ''}`}>
+                  <span>ENCERRA EM</span>
+                  <strong className="countdown">{remaining.text}</strong>
+                </div>
+              )}
+            </div>
+
+            <div className="console-Lot-header">
+              <h1>{lot.title}</h1>
+              <p className="detail-artist">
+                <b>{artist}</b> · {year}
+              </p>
+            </div>
+
+            {/* VALUATION BOX */}
+            <div className="detail-pricebox">
+              <div className="pricebox-main">
+                <span>
+                  {lot.status === 'live'
+                    ? lot.currentBid !== null
+                      ? 'LANCE ATUAL'
+                      : 'LANCE INICIAL'
+                    : lot.status === 'closed'
+                      ? lot.currentBid === null
+                        ? 'ENCERRADO SEM LANCES'
+                        : 'VALOR DE ARREMATE'
+                      : 'LANCE INICIAL'}
+                </span>
+                <strong>
+                  {lot.status === 'closed' && lot.currentBid === null
+                    ? '—'
+                    : brl(lot.currentBid ?? lot.openingBid)}
+                </strong>
+                <small>
+                  Lance inicial: {brl(lot.openingBid)} · Incremento mínimo: {brl(lot.increment)}
+                </small>
+              </div>
+
+              <div className="leader-tag">
+                {lot.leader ? (
+                  <>
+                    <span>{lot.status === 'closed' ? 'ARREMATANTE' : 'NA LIDERANÇA'}</span>
+                    <b className="leader-badge">{lot.leader}</b>
+                    <small>
+                      {bids.length} {bids.length === 1 ? 'lance' : 'lances'}
+                    </small>
+                  </>
+                ) : (
+                  <>
+                    <span>DISPUTA</span>
+                    <b>Aguardando 1º lance</b>
+                    <small>Mínimo {brl(lot.openingBid)}</small>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* TIMING METADATA */}
+            <div className="detail-timing">
+              <div>
+                <span>INÍCIO DO PREGÃO</span>
+                <b>{when(lot.startsAt)}</b>
+              </div>
+              <div>
+                <span>FECHAMENTO PREVISTO</span>
+                <b>{when(lot.endsAt)}</b>
+              </div>
+            </div>
+
+            {/* ROLE-SPECIFIC INTERACTION AREA */}
+            {lot.status === 'live' ? (
+              user?.role === 'auctioneer' ? (
+                <div className="role-restriction-box">
+                  <div className="restriction-header">
+                    <span className="role-pill-badge">MODO LEILOEIRO (VENDEDOR)</span>
+                    <b>Você está visualizando como Leiloeiro</b>
+                  </div>
+                  <p>
+                    Conforme as regras da Casa de Leilões, o perfil de <b>Leiloeiro</b> cria e
+                    gerencia lotes, mas <b>não pode dar lances</b>. Para disputar este lote, entre
+                    com uma conta de <b>Licitante</b>.
+                  </p>
+                  <div className="restriction-actions">
+                    <Link href="/console" className="button button-outline compact">
+                      Painel do Leiloeiro →
+                    </Link>
+                    {bids.length === 0 && (
+                      <button
+                        type="button"
+                        className="button button-danger compact"
+                        disabled={cancelling}
+                        onClick={handleCancelLot}
+                      >
+                        {cancelling ? 'Cancelando…' : 'Cancelar este lote (0 lances)'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="bid-panel">
+                  {user?.role === 'bidder' && (
+                    <>
+                      {lot.isCurrentUserLeader ? (
+                        <div className="lead-status lead-winning">
+                          <span>✓</span>
+                          <div>
+                            <b>Você está na liderança deste lote!</b>
+                            <small>
+                              O valor do seu lance está reservado na sua carteira até o desfecho do
+                              pregão.
+                            </small>
+                          </div>
+                        </div>
+                      ) : bids.length > 0 ? (
+                        <div className="lead-status lead-outbid">
+                          <span>⚡</span>
+                          <div>
+                            <b>Lote em disputa ao vivo</b>
+                            <small>
+                              Oferte pelo menos {brl(minimum)} para assumir a liderança agora.
+                            </small>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {wallet && (
+                        <div className="bidder-wallet-strip">
+                          <div>
+                            <span>Seu saldo disponível:</span>
+                            <strong
+                              className={wallet.available < minimum ? 'balance-low' : ''}
+                            >
+                              {brl(wallet.available)}
+                            </strong>
+                            {wallet.committed > 0 && (
+                              <small>(Comprometido: {brl(wallet.committed)})</small>
+                            )}
+                          </div>
+                          <Link href="/wallet" className="wallet-topup-link">
+                            + Depositar saldo
+                          </Link>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  <div className="quick-bids-group">
+                    <span className="quick-bids-label">
+                      Lance rápido (clique para ofertar imediatamente):
+                    </span>
+                    <div className="quick-bids-row">
+                      {quickAmounts.map((qAmount, idx) => (
+                        <button
+                          key={qAmount}
+                          type="button"
+                          className={`quick-bid-btn ${idx === 0 ? 'recommended' : ''}`}
+                          disabled={busy || Boolean(user && lot.isCurrentUserLeader)}
+                          onClick={() => submitBidAmount(qAmount)}
+                        >
+                          <small>{idx === 0 ? 'Lance mínimo' : `+${idx + 1}x inc.`}</small>
+                          <strong>{brl(qAmount)}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <label htmlFor="bid-amount" className="custom-bid-label">
+                    Ou digite um valor personalizado (mínimo {brl(minimum)}):
+                  </label>
+                  <div className="bid-entry">
+                    <span>R$</span>
+                    <input
+                      id="bid-amount"
+                      type="number"
+                      min={minimum}
+                      step={lot.increment}
+                      placeholder={minimum.toFixed(2)}
+                      value={amount}
+                      onChange={event => setAmount(event.target.value)}
+                    />
+                    <button
+                      className="button button-primary"
+                      onClick={() => submitBidAmount(Number(amount || minimum))}
+                      disabled={busy || Boolean(user && lot.isCurrentUserLeader)}
+                    >
+                      {busy
+                        ? 'Enviando…'
+                        : user
+                          ? 'Confirmar Lance ↗'
+                          : 'Entrar e Dar Lance ↗'}
+                    </button>
+                  </div>
+
+                  <div className="bid-rules-note">
+                    <span>⏱ Proteção Anti-Sniping:</span> lances realizados nos 2 minutos finais
+                    prorrogam o encerramento em +2 minutos automaticamente.
+                  </div>
+
+                  {!user && (
+                    <button className="login-prompt-banner" type="button" onClick={onLogin}>
+                      <span>Ainda não entrou na sua conta?</span>
+                      <b>Clique aqui para entrar como Licitante →</b>
+                    </button>
+                  )}
+                </div>
+              )
+            ) : lot.status === 'scheduled' ? (
+              <div className="notice-box scheduled-notice">
+                <b>⏳ Este lote está agendado</b>
+                <p>
+                  A sala de lances abrirá automaticamente em <b>{when(lot.startsAt)}</b> com lance
+                  inicial de <b>{brl(lot.openingBid)}</b> e incremento mínimo de{' '}
+                  <b>{brl(lot.increment)}</b>.
+                </p>
+                {user?.role === 'auctioneer' && bids.length === 0 && (
+                  <button
+                    type="button"
+                    className="button button-danger compact"
+                    disabled={cancelling}
+                    onClick={handleCancelLot}
+                  >
+                    {cancelling ? 'Cancelando…' : 'Cancelar lote agendado'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="notice-box closed-notice">
+                <b>✓ Pregão encerrado</b>
+                <p>
+                  {lot.leader
+                    ? `Obra arrematada por ${lot.leader} pelo valor final de ${brl(lot.currentBid)}.`
+                    : 'Este lote foi encerrado sem receber lances.'}
+                </p>
+                <div className="closed-notice-actions">
+                  {lot.receiptToken && (
+                    <Link
+                      className="button button-primary compact"
+                      href={`/receipt/${lot.receiptToken}`}
+                    >
+                      Abrir Comprovante de Arremate ↗
+                    </Link>
+                  )}
+                  <Link className="button button-outline compact" href={`/audit/${lot.id}`}>
+                    Auditar Histórico SHA-256 ↗
+                  </Link>
+                </div>
+              </div>
+            )}
+
+            {/* LIVE BID HISTORY */}
+            <div className="bid-history">
+              <div className="history-heading">
+                <div className="history-title-group">
+                  <h3>Histórico de lances</h3>
+                  <span className="live-feed-pill">
+                    <i /> Tempo real ({bids.length})
+                  </span>
+                </div>
+                <Link href={`/audit/${lot.id}`}>Verificar SHA-256 ↗</Link>
+              </div>
+
+              {bids.length ? (
+                <div className="bid-list">
+                  {bids.slice(0, 12).map((bid, index) => (
+                    <div
+                      className={`bid-row ${index === 0 ? 'bid-row-leader' : ''}`}
+                      key={`${bid.createdAt}-${index}`}
+                    >
+                      <span className="avatar tiny-avatar">
+                        {index === 0 ? '★' : `#${bids.length - index}`}
+                      </span>
+                      <div className="bid-row-info">
+                        <b>
+                          {bid.bidder}
+                          {index === 0 && <ins className="leader-chip">Líder</ins>}
+                        </b>
+                        <small>{whenFull(bid.createdAt)}</small>
+                      </div>
+                      <strong>{brl(bid.amount)}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="history-empty">
+                  <span>◇</span>
+                  <p>Ainda não há lances registrados neste lote. Seja o primeiro a participar!</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
-  </>;
+  );
 }
 
-function LotView({ id, user, onLogin, notify }: { id: string; user: User | null; onLogin: () => void; notify: (kind: 'success' | 'error', text: string) => void }) {
-  const [lot, setLot] = useState<Lot | null>(null); const [bids, setBids] = useState<Bid[]>([]); const [amount, setAmount] = useState(''); const [busy, setBusy] = useState(false); const [clock, setClock] = useState(Date.now());
-  const load = useCallback(async () => { const [lotResponse, bidResponse] = await Promise.all([apiFetch(`/lots/${id}`), apiFetch(`/lots/${id}/bids`)]); const lotData = await lotResponse.json(); if (lotResponse.ok) setLot(lotData); setBids(await bidResponse.json()); }, [id]);
-  useEffect(() => { load().catch(() => notify('error', 'Não foi possível carregar este lote.')); }, [load, notify]);
-  useEffect(() => { const channel: Socket = io(SOCKET, { withCredentials: true }); channel.emit('lot:join', id); channel.on('lot:bid', () => { load(); }); channel.on('lot:live', () => { load(); }); channel.on('lot:closed', () => { load(); }); return () => { channel.disconnect(); }; }, [id, load]);
-  useEffect(() => { const timer = window.setInterval(() => setClock(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
-  useEffect(() => { if (!lot || lot.status !== 'live') return; const timeout = window.setTimeout(() => load(), Math.max(0, new Date(lot.endsAt).getTime() - Date.now() + 300)); return () => window.clearTimeout(timeout); }, [lot?.status, lot?.endsAt, load]);
-  const minimum = lot ? (lot.currentBid ?? (lot.openingBid - lot.increment)) + lot.increment : 0;
-  const secondsLeft = lot ? Math.max(0, Math.floor((new Date(lot.endsAt).getTime() - clock) / 1000)) : 0;
-  const countdown = `${String(Math.floor(secondsLeft / 3600)).padStart(2, '0')}:${String(Math.floor(secondsLeft % 3600 / 60)).padStart(2, '0')}:${String(secondsLeft % 60).padStart(2, '0')}`;
-  const placeBid = async () => { if (!user) return onLogin(); setBusy(true); try { const response = await apiFetch(`/lots/${id}/bids`, { method: 'POST', body: JSON.stringify({ amount: Number(amount || minimum) }) }); const data = await response.json(); if (!response.ok) return notify('error', data.error); setAmount(''); notify('success', data.extended ? 'Lance aceito. O lote ganhou mais dois minutos.' : 'Lance aceito. Você está na disputa.'); await load(); } finally { setBusy(false); } };
-  if (!lot) return <div className="page-loader"><span className="loader" />Carregando o lote…</div>;
-  const showBidTicker = lot.artwork?.seedKey === 'demo:van-gogh-bedroom' && bids.length > 1;
-  return <section className="detail-page"><div className="breadcrumb"><Link href="/">Galeria</Link><span> / </span><span>{lot.title}</span></div><div className="detail-grid"><div><Artwork src={lot.imageUrl} title={lot.title} className="detail-art" /><div className="detail-links"><Link href={`/audit/${lot.id}`}>↗ Ver auditoria pública</Link>{lot.receiptToken && <Link href={`/receipt/${lot.receiptToken}`}>◇ Ver comprovante</Link>}</div></div><div className="detail-copy"><div className="detail-overline"><Status value={lot.status} /><span>LOTE #{lot.id.slice(0, 6).toUpperCase()}</span></div><h1>{lot.title}</h1><p className="detail-artist">{lot.artwork?.artist ?? lot.artwork?.artist_title} · {lot.artwork?.date ?? lot.artwork?.date_display}</p><p className="detail-description">Uma obra selecionada do acervo público. Conheça sua trajetória e acompanhe a disputa por uma peça única.</p><div className="detail-pricebox"><div><span>{lot.status === 'live' ? 'LANCE ATUAL' : lot.status === 'closed' ? 'ARREMATADO POR' : 'LANCE INICIAL'}</span><strong>{brl(lot.currentBid ?? lot.openingBid)}</strong></div><div className="leader-tag">{lot.leader ? <><span>NA LIDERANÇA</span><b>{lot.leader}</b></> : <><span>INCREMENTO MÍNIMO</span><b>{brl(lot.increment)}</b></>}</div></div>{lot.status === 'live' ? <><div className="detail-timing live-timing"><div><span>ABERTURA</span><b>{when(lot.startsAt)}</b></div><div><span>ENCERRA EM</span><b className="countdown">{countdown}</b></div></div>{user?.role === 'bidder' && lot.isCurrentUserLeader !== undefined && <div className={`lead-status ${lot.isCurrentUserLeader ? 'lead-winning' : 'lead-outbid'}`}>{lot.isCurrentUserLeader ? '✓ Você está ganhando neste lote.' : '↑ Você foi superado. Um novo lance pode colocar você na liderança.'}</div>}<div className="bid-panel"><label htmlFor="bid-amount">Seu lance</label><div className="bid-entry"><span>R$</span><input id="bid-amount" type="number" min={minimum} step={lot.increment} placeholder={minimum.toFixed(2)} value={amount} onChange={event => setAmount(event.target.value)} /><button className="button button-lime" onClick={placeBid} disabled={busy}>{busy ? 'Enviando…' : 'Dar meu lance ↗'}</button></div><small>O próximo lance deve ser de pelo menos {brl(minimum)}. Saldo simulado, sem pagamentos reais.</small>{!user && <button className="text-link login-prompt" onClick={onLogin}>Entre com uma conta de licitante para participar</button>}</div></> : <><div className="notice-box">{lot.status === 'closed' ? 'Este leilão foi encerrado.' : `Lances abrem em ${when(lot.startsAt)}.`}{lot.receiptToken && <Link href={`/receipt/${lot.receiptToken}`}> Abrir comprovante do arremate ↗</Link>}</div><div className="detail-timing"><div><span>ABERTURA</span><b>{when(lot.startsAt)}</b></div><div><span>ENCERRAMENTO</span><b>{when(lot.endsAt)}</b></div></div></>}<div className="bid-history"><div className="history-heading"><h3>Histórico de lances</h3><Link href={`/audit/${lot.id}`}>Verificar integridade ↗</Link></div>{bids.length ? showBidTicker ? <LiveBidTicker bids={bids} /> : bids.slice(0, 8).map((bid, index) => <div className="bid-row" key={`${bid.createdAt}-${index}`}><span className="avatar tiny-avatar">{bid.bidder.slice(-1)}</span><span><b>{bid.bidder}</b><small>{when(bid.createdAt)}</small></span><strong>{brl(bid.amount)}</strong></div>) : <p className="history-empty">Ainda não há lances. Seja o primeiro a participar.</p>}</div></div></div></section>;
+function ConsoleView({
+  user,
+  onLogin,
+  notify
+}: {
+  user: User | null;
+  onLogin: () => void;
+  notify: (kind: 'success' | 'error', text: string) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [items, setItems] = useState<Item[]>([]);
+  const [selected, setSelected] = useState<Item | null>(null);
+  const [lots, setLots] = useState<Lot[]>([]);
+  const [lotFilter, setLotFilter] = useState<'all' | 'live' | 'scheduled' | 'closed'>('all');
+  const [opening, setOpening] = useState('800');
+  const [increment, setIncrement] = useState('50');
+  const [starts, setStarts] = useState('');
+  const [ends, setEnds] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const applySchedulePreset = useCallback((startOffsetMinutes: number, durationMinutes: number) => {
+    const now = new Date();
+    const startDate = new Date(now.getTime() + startOffsetMinutes * 60 * 1000);
+    const endDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
+    setStarts(toLocalInputValue(startDate));
+    setEnds(toLocalInputValue(endDate));
+  }, []);
+
+  useEffect(() => {
+    applySchedulePreset(0, 120);
+  }, [applySchedulePreset]);
+
+  const loadLots = useCallback(
+    () =>
+      apiFetch('/auctioneer/lots')
+        .then(r => r.json())
+        .then(data => setLots(Array.isArray(data) ? data : [])),
+    []
+  );
+
+  useEffect(() => {
+    if (user?.role === 'auctioneer') loadLots();
+  }, [user, loadLots]);
+
+  const runSearch = async (termToSearch?: string) => {
+    const targetQuery = (termToSearch ?? query).trim();
+    if (!targetQuery) return;
+    if (termToSearch) setQuery(termToSearch);
+    setLoading(true);
+    try {
+      const response = await apiFetch(`/items?q=${encodeURIComponent(targetQuery)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      setItems(data.items);
+      if (!data.items.length) notify('error', 'Nenhuma obra encontrada. Tente outro termo.');
+    } catch (error: any) {
+      notify('error', error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createLot = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!selected) return notify('error', 'Escolha uma obra na busca para montar o lote.');
+    setSubmitting(true);
+    try {
+      const response = await apiFetch('/lots', {
+        method: 'POST',
+        body: JSON.stringify({
+          sourceId: selected.id,
+          openingBid: Number(opening),
+          increment: Number(increment),
+          startsAt: new Date(starts).toISOString(),
+          endsAt: new Date(ends).toISOString()
+        })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      notify('success', `Lote "${selected.title}" publicado com sucesso na vitrine!`);
+      setSelected(null);
+      setItems([]);
+      setQuery('');
+      await loadLots();
+    } catch (error: any) {
+      notify('error', error.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const cancelLot = async (lotId: string) => {
+    const response = await apiFetch(`/lots/${lotId}/cancel`, { method: 'POST' });
+    const data = await response.json();
+    if (!response.ok) notify('error', data.error);
+    else {
+      notify('success', 'Lote cancelado.');
+      await loadLots();
+    }
+  };
+
+  if (!user) {
+    return (
+      <AccessNotice
+        title="Painel do Leiloeiro (Vendedor)"
+        message="Entre com uma conta de Leiloeiro para buscar obras na API pública, configurar lances iniciais e gerenciar seus lotes."
+        onLogin={onLogin}
+      />
+    );
+  }
+  if (user.role !== 'auctioneer') {
+    return (
+      <AccessNotice
+        title="Acesso exclusivo para Leiloeiros"
+        message="Você está conectado como Licitante (Cliente). Para publicar e gerenciar lotes, entre com o perfil de Leiloeiro."
+        onLogin={onLogin}
+      />
+    );
+  }
+
+  const activeLots = lots.filter(l => l.status !== 'cancelled');
+  const liveLotsCount = lots.filter(l => l.status === 'live').length;
+  const scheduledLotsCount = lots.filter(l => l.status === 'scheduled').length;
+  const closedLotsCount = lots.filter(l => l.status === 'closed').length;
+  const filteredLots = lots.filter(l => (lotFilter === 'all' ? true : l.status === lotFilter));
+
+  const quickArtistTerms = ['Van Gogh', 'Monet', 'Portinari', 'Magritte', 'Rembrandt', 'Cézanne', 'Hokusai'];
+
+  return (
+    <section className="dashboard-page">
+      <div className="dashboard-heading">
+        <div>
+          <span className="eyebrow">PAINEL DO LEILOEIRO · VENDEDOR</span>
+          <h1>Curadoria &amp; Gestão de Pregões</h1>
+          <p>
+            Olá, <b>{user.name}</b>. Busque obras nas APIs públicas de museus, defina as regras de
+            disputa e acompanhe seus lotes ao vivo.
+          </p>
+        </div>
+
+        <div className="dashboard-kpis">
+          <div className="kpi-box">
+            <span>PUBLICADOS</span>
+            <strong>{activeLots.length}</strong>
+          </div>
+          <div className="kpi-box kpi-live">
+            <span>AO VIVO</span>
+            <strong>{liveLotsCount}</strong>
+          </div>
+          <div className="kpi-box">
+            <span>AGENDADOS</span>
+            <strong>{scheduledLotsCount}</strong>
+          </div>
+          <div className="kpi-box">
+            <span>ENCERRADOS</span>
+            <strong>{closedLotsCount}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div className="console-grid">
+        {/* STEP 1 & 2: SEARCH API & CREATE LOT */}
+        <div className="panel create-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">ETAPA 01 · CATÁLOGO EXTERNO (API PÚBLICA)</span>
+              <h2>Buscar obra para novo lote</h2>
+            </div>
+            <span className="panel-icon">⌕</span>
+          </div>
+          <p>
+            Pesquise em tempo real no acervo do <b>Art Institute of Chicago</b>,{' '}
+            <b>Projeto Portinari</b> e <b>LACMA</b>.
+          </p>
+
+          <div className="search-input">
+            <input
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              onKeyDown={event => event.key === 'Enter' && runSearch()}
+              placeholder="Digite artista, obra ou tema (ex.: Monet, Café, Magritte)…"
+            />
+            <button type="button" onClick={() => runSearch()} disabled={loading}>
+              {loading ? 'Buscando…' : 'Buscar na API ↗'}
+            </button>
+          </div>
+
+          <div className="quick-search-chips">
+            <span>Sugestões rápidas:</span>
+            {quickArtistTerms.map(term => (
+              <button key={term} type="button" onClick={() => runSearch(term)}>
+                {term}
+              </button>
+            ))}
+          </div>
+
+          {items.length > 0 && (
+            <div className="item-results">
+              {items.map(item => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`item-result ${selected?.id === item.id ? 'selected' : ''}`}
+                  onClick={() => {
+                    setSelected(item);
+                    if (!starts || !ends) applySchedulePreset(0, 120);
+                  }}
+                >
+                  <Artwork src={item.imageUrl} title={item.title} />
+                  <div className="item-result-copy">
+                    <b>{item.title}</b>
+                    <small>
+                      {item.artist} · {item.date}
+                    </small>
+                    <ins>{item.publicDomain ? 'Domínio Público' : 'Acervo Catalogado'}</ins>
+                  </div>
+                  <span className="select-check">
+                    {selected?.id === item.id ? '✓ Selecionada' : 'Selecionar +'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selected ? (
+            <form className="lot-form" onSubmit={createLot}>
+              <div className="selected-art-card">
+                <Artwork src={selected.imageUrl} title={selected.title} />
+                <div className="selected-art-info">
+                  <span>ETAPA 02 · OBRA SELECIONADA PARA LOTE</span>
+                  <b>{selected.title}</b>
+                  <small>
+                    {selected.artist} · {selected.date} ·{' '}
+                    <a href={selected.sourceUrl} target="_blank" rel="noreferrer">
+                      Verificar fonte externa ↗
+                    </a>
+                  </small>
+                </div>
+                <button
+                  type="button"
+                  className="clear-selected"
+                  onClick={() => setSelected(null)}
+                  title="Trocar obra"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="form-row">
+                <label>
+                  Lance inicial (R$)
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    value={opening}
+                    onChange={event => setOpening(event.target.value)}
+                    required
+                  />
+                </label>
+                <label>
+                  Incremento mínimo (R$)
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    value={increment}
+                    onChange={event => setIncrement(event.target.value)}
+                    required
+                  />
+                </label>
+              </div>
+
+              <div className="schedule-presets">
+                <span>Janela do pregão (preenchimento rápido):</span>
+                <div className="preset-buttons">
+                  <button type="button" onClick={() => applySchedulePreset(0, 3)}>
+                    ⚡ Ao vivo agora · 3 min (teste de arremate)
+                  </button>
+                  <button type="button" onClick={() => applySchedulePreset(0, 120)}>
+                    ● Ao vivo agora · 2 horas
+                  </button>
+                  <button type="button" onClick={() => applySchedulePreset(0, 1440)}>
+                    ● Ao vivo agora · 24 horas
+                  </button>
+                  <button type="button" onClick={() => applySchedulePreset(60, 180)}>
+                    ⏳ Agendar +1h
+                  </button>
+                </div>
+              </div>
+
+              <div className="form-row">
+                <label>
+                  Horário de início
+                  <input
+                    type="datetime-local"
+                    value={starts}
+                    onChange={event => setStarts(event.target.value)}
+                    required
+                  />
+                </label>
+                <label>
+                  Horário de encerramento
+                  <input
+                    type="datetime-local"
+                    value={ends}
+                    onChange={event => setEnds(event.target.value)}
+                    required
+                  />
+                </label>
+              </div>
+
+              <button className="button button-primary full-button" disabled={submitting}>
+                {submitting ? 'Publicando lote na vitrine…' : 'Publicar Lote no Pregão ↗'}
+              </button>
+            </form>
+          ) : (
+            <div className="lot-form-placeholder">
+              <span>◇</span>
+              <p>
+                Busque e selecione uma obra acima para definir o lance inicial, incremento mínimo e
+                horário do pregão.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* RIGHT PANEL: MANAGE LOTS */}
+        <div className="panel dashboard-lots">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">GESTÃO DO ACERVO</span>
+              <h2>Meus lotes publicados</h2>
+            </div>
+            <span className="count-badge">{lots.length}</span>
+          </div>
+
+          <div className="managed-filters">
+            {(
+              [
+                ['all', 'Todos'],
+                ['live', 'Ao vivo'],
+                ['scheduled', 'Agendados'],
+                ['closed', 'Encerrados']
+              ] as const
+            ).map(([val, label]) => (
+              <button
+                key={val}
+                type="button"
+                className={lotFilter === val ? 'active' : ''}
+                onClick={() => setLotFilter(val)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {filteredLots.length ? (
+            <div className="managed-lot-list">
+              {filteredLots.map(lot => {
+                const canCancel =
+                  (lot.status === 'scheduled' || lot.status === 'live') &&
+                  (lot.bidCount ?? 0) === 0;
+                return (
+                  <div className="managed-lot" key={lot.id}>
+                    <Artwork src={lot.imageUrl} title={lot.title} />
+                    <div className="managed-lot-copy">
+                      <div className="managed-lot-top">
+                        <Status value={lot.status} />
+                        <small>#{lot.id.slice(0, 6).toUpperCase()}</small>
+                      </div>
+                      <b>{lot.title}</b>
+                      <span>
+                        {lot.currentBid !== null
+                          ? `Atual: ${brl(lot.currentBid)}`
+                          : `Inicial: ${brl(lot.openingBid)}`}{' '}
+                        · {lot.bidCount ?? 0} {(lot.bidCount ?? 0) === 1 ? 'lance' : 'lances'}
+                      </span>
+                      <small className="managed-dates">
+                        {when(lot.startsAt)} até {when(lot.endsAt)}
+                      </small>
+                    </div>
+                    <div className="managed-actions">
+                      <Link href={`/lots/${lot.id}`} className="action-btn" title="Abrir sala do lote">
+                        Sala ↗
+                      </Link>
+                      <Link
+                        href={`/audit/${lot.id}`}
+                        className="action-btn"
+                        title="Ver auditoria SHA-256"
+                      >
+                        Auditoria
+                      </Link>
+                      {lot.receiptToken && (
+                        <Link
+                          href={`/receipt/${lot.receiptToken}`}
+                          className="action-btn highlight"
+                          title="Comprovante de arremate"
+                        >
+                          Recibo
+                        </Link>
+                      )}
+                      {canCancel && (
+                        <button
+                          type="button"
+                          className="action-btn danger"
+                          onClick={() => cancelLot(lot.id)}
+                          title="Cancelar lote sem lances"
+                        >
+                          Cancelar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="small-empty">
+              Nenhum lote encontrado neste filtro. Use o painel ao lado para buscar uma obra na API
+              e publicar um novo lote.
+            </div>
+          )}
+
+          <div className="seller-note">
+            <span>✦</span>
+            <p>
+              <b>Persistência e Resiliência:</b> Os metadados da obra são salvos localmente no
+              momento da criação do lote. Lotes existentes permanecem íntegros mesmo se a API do
+              museu oscilar. Lotes que já receberam lances não podem ser cancelados.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
 }
 
-function ConsoleView({ user, notify }: { user: User | null; notify: (kind: 'success' | 'error', text: string) => void }) {
-  const [query, setQuery] = useState(''); const [items, setItems] = useState<Item[]>([]); const [selected, setSelected] = useState<Item | null>(null); const [lots, setLots] = useState<Lot[]>([]); const [opening, setOpening] = useState('500'); const [increment, setIncrement] = useState('50'); const [starts, setStarts] = useState(''); const [ends, setEnds] = useState(''); const [loading, setLoading] = useState(false); const [submitting, setSubmitting] = useState(false);
-  const loadLots = useCallback(() => apiFetch('/auctioneer/lots').then(r => r.json()).then(data => setLots(Array.isArray(data) ? data : [])), []);
-  useEffect(() => { if (user?.role === 'auctioneer') loadLots(); }, [user, loadLots]);
-  const search = async () => { if (!query.trim()) return; setLoading(true); try { const response = await apiFetch(`/items?q=${encodeURIComponent(query)}`); const data = await response.json(); if (!response.ok) throw new Error(data.error); setItems(data.items); if (!data.items.length) notify('error', 'Nenhuma obra encontrada. Tente outro termo.'); } catch (error: any) { notify('error', error.message); } finally { setLoading(false); } };
-  const createLot = async (event: React.FormEvent) => { event.preventDefault(); if (!selected) return notify('error', 'Escolha uma obra para o lote.'); setSubmitting(true); try { const response = await apiFetch('/lots', { method: 'POST', body: JSON.stringify({ sourceId: selected.id, openingBid: Number(opening), increment: Number(increment), startsAt: new Date(starts).toISOString(), endsAt: new Date(ends).toISOString() }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); notify('success', 'Lote publicado na galeria.'); setSelected(null); setItems([]); setQuery(''); await loadLots(); } catch (error: any) { notify('error', error.message); } finally { setSubmitting(false); } };
-  const cancelLot = async (lotId: string) => { const response = await apiFetch(`/lots/${lotId}/cancel`, { method: 'POST' }); const data = await response.json(); if (!response.ok) notify('error', data.error); else { notify('success', 'Lote cancelado.'); await loadLots(); } };
-  if (!user) return <AccessNotice title="Painel do leiloeiro" message="Entre com o perfil de leiloeiro para criar e gerenciar lotes." />;
-  if (user.role !== 'auctioneer') return <AccessNotice title="Acesso ao ateliê" message="Este espaço é para quem organiza os lotes. Entre com um perfil de leiloeiro ou crie um perfil de leiloeiro para continuar." />;
-  const ownLots = lots;
-  return <section className="dashboard-page"><div className="dashboard-heading"><div><span className="eyebrow">Ateliê do leiloeiro</span><h1>Bom dia, {user.name}.</h1><p>Prepare a próxima obra para encontrar seu novo destino.</p></div><div className="dashboard-stat"><span>LOTES PUBLICADOS</span><strong>{ownLots.length.toString().padStart(2, '0')}</strong></div></div><div className="console-grid"><div className="panel create-panel"><div className="panel-heading"><div><span className="eyebrow">01 / CATÁLOGO</span><h2>Encontre uma obra</h2></div><span className="panel-icon">⌕</span></div><p>Busque no acervo do Art Institute of Chicago.</p><div className="search-input"><input value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => event.key === 'Enter' && search()} placeholder="Ex.: Monet, paisagem, flores…" /><button onClick={search} disabled={loading}>{loading ? '…' : 'Buscar ↗'}</button></div>{items.length > 0 && <div className="item-results">{items.map(item => <button key={item.id} className={`item-result ${selected?.id === item.id ? 'selected' : ''}`} onClick={() => setSelected(item)}><Artwork src={item.imageUrl} title={item.title} /><span><b>{item.title}</b><small>{item.artist} · {item.date}</small></span><span className="select-check">{selected?.id === item.id ? '✓' : '+'}</span></button>)}</div>}{selected && <form className="lot-form" onSubmit={createLot}><div className="selected-art"><span>OBRA SELECIONADA</span><b>{selected.title}</b><small>{selected.artist} · <a href={selected.sourceUrl} target="_blank" rel="noreferrer">Fonte ↗</a></small></div><div className="form-row"><label>Lance inicial (R$)<input type="number" min="1" step="0.01" value={opening} onChange={event => setOpening(event.target.value)} required /></label><label>Incremento (R$)<input type="number" min="1" step="0.01" value={increment} onChange={event => setIncrement(event.target.value)} required /></label></div><div className="form-row"><label>Início<input type="datetime-local" value={starts} onChange={event => setStarts(event.target.value)} required /></label><label>Encerramento<input type="datetime-local" value={ends} onChange={event => setEnds(event.target.value)} required /></label></div><button className="button button-dark full-button" disabled={submitting}>{submitting ? 'Publicando…' : 'Publicar lote ↗'}</button></form>}</div><div className="panel dashboard-lots"><div className="panel-heading"><div><span className="eyebrow">02 / SEUS LOTES</span><h2>Em andamento</h2></div><span className="count-badge">{ownLots.length}</span></div>{ownLots.length ? ownLots.map(lot => <div className="managed-lot" key={lot.id}><Artwork src={lot.imageUrl} title={lot.title} /><div className="managed-lot-copy"><b>{lot.title}</b><span><Status value={lot.status} /> · {brl(lot.currentBid ?? lot.openingBid)}</span></div><div className="managed-actions"><Link href={`/lots/${lot.id}`} aria-label="Abrir lote">↗</Link>{lot.status === 'scheduled' && <button onClick={() => cancelLot(lot.id)} title="Cancelar lote">×</button>}</div></div>) : <div className="small-empty">Seus lotes aparecem aqui após a publicação.</div>}<div className="seller-note"><span>✦</span><p>Itens existentes permanecem disponíveis mesmo se o acervo externo ficar fora do ar.</p></div></div></div></section>;
-}
+function WalletView({
+  user,
+  onLogin,
+  notify,
+  onWalletChange
+}: {
+  user: User | null;
+  onLogin: () => void;
+  notify: (kind: 'success' | 'error', text: string) => void;
+  onWalletChange: () => void;
+}) {
+  const [wallet, setWallet] = useState<WalletData | null>(null);
+  const [wins, setWins] = useState<any[]>([]);
+  const [amount, setAmount] = useState('1000');
+  const [busy, setBusy] = useState(false);
 
-function WalletView({ user, notify }: { user: User | null; notify: (kind: 'success' | 'error', text: string) => void }) {
-  const [wallet, setWallet] = useState<any>(null); const [wins, setWins] = useState<any[]>([]); const [amount, setAmount] = useState('500'); const [busy, setBusy] = useState(false);
-  const refresh = useCallback(async () => { const [balance, victories] = await Promise.all([apiFetch('/wallet/me'), apiFetch('/wallet/wins')]); if (balance.ok) setWallet(await balance.json()); if (victories.ok) setWins(await victories.json()); }, []);
-  useEffect(() => { if (user?.role === 'bidder') refresh(); }, [user, refresh]);
-  const deposit = async () => { setBusy(true); try { const response = await apiFetch('/wallet/deposits', { method: 'POST', body: JSON.stringify({ amount: Number(amount) }) }); const data = await response.json(); if (!response.ok) throw new Error(data.error); notify('success', `Depósito simulado de ${brl(Number(amount))} concluído.`); await refresh(); } catch (error: any) { notify('error', error.message); } finally { setBusy(false); } };
-  if (!user) return <AccessNotice title="Sua carteira" message="Entre com um perfil de licitante para consultar seu saldo." />;
-  if (user.role !== 'bidder') return <AccessNotice title="Área do licitante" message="A carteira está disponível para perfis de licitante. Entre com uma conta de licitante ou crie seu perfil." />;
-  return <section className="dashboard-page wallet-page"><div className="dashboard-heading"><div><span className="eyebrow">SUA CONTA</span><h1>Uma carteira para descobrir.</h1><p>Olá, {user.name}. Acompanhe seu saldo e seus arremates.</p></div></div><div className="wallet-grid"><div className="balance-card"><span className="eyebrow">SALDO DISPONÍVEL</span><strong>{brl(wallet?.available)}</strong><div className="balance-details"><span>Saldo total <b>{brl(wallet?.total)}</b></span><span>Comprometido <b>{brl(wallet?.committed)}</b></span></div><div className="wallet-deposit"><label htmlFor="deposit-amount">Adicionar saldo simulado</label><div className="bid-entry"><span>R$</span><input id="deposit-amount" type="number" min="1" step="0.01" value={amount} onChange={event => setAmount(event.target.value)} /><button className="button button-lime" disabled={busy} onClick={deposit}>{busy ? 'Adicionando…' : 'Adicionar saldo +'}</button></div><small>Este saldo é apenas demonstrativo. Nenhuma cobrança será realizada.</small></div></div><div className="panel win-panel"><div className="panel-heading"><div><span className="eyebrow">HISTÓRICO</span><h2>Meus arremates</h2></div><span className="count-badge">{wins.length}</span></div>{wins.length ? wins.map(win => <div className="managed-lot win-lot" key={win.id}><Artwork src={win.imageUrl} title={win.title} /><div className="managed-lot-copy"><b>{win.title}</b><span>{brl(win.amount)} · {when(win.closedAt)}</span></div><Link className="button button-outline compact" href={`/receipt/${win.receiptToken}`}>Comprovante ↗</Link></div>) : <div className="small-empty">Seus arremates e comprovantes aparecem aqui quando você vence um lote.</div>}</div></div><div className="wallet-tip"><span>◇</span><p>O saldo comprometido fica reservado enquanto você lidera um lote. Se outro lance superar o seu, o valor retorna ao saldo disponível imediatamente.</p></div></section>;
+  const refresh = useCallback(async () => {
+    const [balance, victories] = await Promise.all([
+      apiFetch('/wallet/me'),
+      apiFetch('/wallet/wins')
+    ]);
+    if (balance.ok) setWallet(await balance.json());
+    if (victories.ok) setWins(await victories.json());
+  }, []);
+
+  useEffect(() => {
+    if (user?.role === 'bidder') refresh();
+  }, [user, refresh]);
+
+  const deposit = async (customAmount?: number) => {
+    const valueToDeposit = customAmount ?? Number(amount);
+    setBusy(true);
+    try {
+      const response = await apiFetch('/wallet/deposits', {
+        method: 'POST',
+        body: JSON.stringify({ amount: valueToDeposit })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      notify('success', `Depósito simulado de ${brl(valueToDeposit)} creditado na sua carteira.`);
+      await refresh();
+      onWalletChange();
+    } catch (error: any) {
+      notify('error', error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!user) {
+    return (
+      <AccessNotice
+        title="Carteira do Licitante (Cliente)"
+        message="Entre com uma conta de Licitante para depositar saldo simulado, acompanhar valores reservados em lances e acessar seus comprovantes de arremate."
+        onLogin={onLogin}
+      />
+    );
+  }
+  if (user.role !== 'bidder') {
+    return (
+      <AccessNotice
+        title="Área exclusiva para Licitantes"
+        message="Você está conectado como Leiloeiro (Vendedor). A carteira de lances e arremates é exclusiva para o perfil de Licitante."
+        onLogin={onLogin}
+      />
+    );
+  }
+
+  const quickDeposits = [500, 1000, 2500, 5000, 10000];
+  const kindLabels: Record<string, string> = {
+    deposit: 'Depósito simulado',
+    reserve: 'Reserva em lance líder',
+    release: 'Estorno (lance superado)',
+    settlement_debit: 'Liquidação de arremate',
+    settlement_credit: 'Recebimento de venda'
+  };
+
+  return (
+    <section className="dashboard-page wallet-page">
+      <div className="dashboard-heading">
+        <div>
+          <span className="eyebrow">CARTEIRA DO LICITANTE · CLIENTE</span>
+          <h1>Gestão de Saldo &amp; Arremates</h1>
+          <p>
+            Olá, <b>{user.name}</b>. Deposite saldo simulado para participar dos pregões ao vivo e
+            acesse os comprovantes oficiais das obras que você venceu.
+          </p>
+        </div>
+      </div>
+
+      {/* 3 FINANCIAL SUMMARY CARDS */}
+      <div className="wallet-summary-row">
+        <div className="summary-card primary">
+          <span className="eyebrow">SALDO DISPONÍVEL PARA LANCES</span>
+          <strong>{brl(wallet?.available)}</strong>
+          <small>Livre para ofertar imediatamente nos lotes ao vivo</small>
+        </div>
+        <div className="summary-card">
+          <span className="eyebrow">SALDO COMPROMETIDO (RESERVADO)</span>
+          <strong>{brl(wallet?.committed)}</strong>
+          <small>Bloqueado nos lotes em que você está na liderança</small>
+        </div>
+        <div className="summary-card">
+          <span className="eyebrow">SALDO PATRIMONIAL TOTAL</span>
+          <strong>{brl(wallet?.total)}</strong>
+          <small>Soma do saldo disponível + saldo comprometido</small>
+        </div>
+      </div>
+
+      <div className="wallet-grid">
+        {/* LEFT: DEPOSIT & STATEMENT */}
+        <div className="wallet-left-col">
+          <div className="panel deposit-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">CRÉDITO INSTANTÂNEO</span>
+                <h2>Adicionar saldo simulado</h2>
+              </div>
+              <span className="panel-icon">+</span>
+            </div>
+            <p>
+              Escolha um valor rápido ou informe o montante desejado (até R$ 10.000,00 por
+              operação).
+            </p>
+
+            <div className="quick-deposit-pills">
+              {quickDeposits.map(val => (
+                <button
+                  key={val}
+                  type="button"
+                  className={Number(amount) === val ? 'selected' : ''}
+                  disabled={busy}
+                  onClick={() => setAmount(String(val))}
+                >
+                  + {brl(val)}
+                </button>
+              ))}
+            </div>
+
+            <div className="bid-entry">
+              <span>R$</span>
+              <input
+                id="deposit-amount"
+                type="number"
+                min="1"
+                max="10000"
+                step="0.01"
+                value={amount}
+                onChange={event => setAmount(event.target.value)}
+              />
+              <button className="button button-primary" disabled={busy} onClick={() => deposit()}>
+                {busy ? 'Creditando…' : 'Depositar Saldo +'}
+              </button>
+            </div>
+            <small className="deposit-note">
+              Saldo 100% demonstrativo. Nenhuma cobrança financeira real é efetuada.
+            </small>
+          </div>
+
+          <div className="panel ledger-panel">
+            <div className="panel-heading">
+              <div>
+                <span className="eyebrow">MOVIMENTAÇÕES</span>
+                <h2>Extrato da carteira</h2>
+              </div>
+              <span className="count-badge">{wallet?.transactions?.length ?? 0}</span>
+            </div>
+            {wallet?.transactions?.length ? (
+              <div className="ledger-list">
+                {wallet.transactions.map(tx => (
+                  <div className="ledger-row" key={tx.id}>
+                    <div className="ledger-copy">
+                      <b>{kindLabels[tx.kind] ?? tx.note}</b>
+                      <small>
+                        {tx.lotTitle ? `${tx.lotTitle} · ` : ''}
+                        {whenFull(tx.createdAt)}
+                      </small>
+                    </div>
+                    <div className="ledger-amounts">
+                      {tx.availableDelta !== 0 && (
+                        <strong className={tx.availableDelta > 0 ? 'pos' : 'neg'}>
+                          {tx.availableDelta > 0 ? '+' : ''}
+                          {brl(tx.availableDelta)} disp.
+                        </strong>
+                      )}
+                      {tx.committedDelta !== 0 && (
+                        <small className="committed-tag">
+                          {tx.committedDelta > 0 ? '+' : ''}
+                          {brl(tx.committedDelta)} reservado
+                        </small>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="small-empty">Nenhuma movimentação registrada ainda.</div>
+            )}
+          </div>
+        </div>
+
+        {/* RIGHT: WON LOTS & RECEIPTS */}
+        <div className="panel win-panel">
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">GALERIA DO COLECIONADOR</span>
+              <h2>Meus lotes arrematados</h2>
+            </div>
+            <span className="count-badge">{wins.length}</span>
+          </div>
+          <p>
+            Cada lote vencido gera um comprovante público de arremate que você pode compartilhar
+            por link.
+          </p>
+
+          {wins.length ? (
+            <div className="wins-list">
+              {wins.map(win => (
+                <div className="managed-lot win-lot" key={win.id}>
+                  <Artwork src={win.imageUrl} title={win.title} />
+                  <div className="managed-lot-copy">
+                    <span className="win-tag">✓ ARREMATADO</span>
+                    <b>{win.title}</b>
+                    <span>
+                      Valor final: <strong>{brl(win.amount)}</strong>
+                    </span>
+                    <small>Encerrado em {when(win.closedAt)}</small>
+                  </div>
+                  <div className="win-actions">
+                    <Link
+                      className="button button-primary compact"
+                      href={`/receipt/${win.receiptToken}`}
+                    >
+                      Comprovante ↗
+                    </Link>
+                    <Link className="button button-outline compact" href={`/lots/${win.id}`}>
+                      Ver lote
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="small-empty">
+              <span>◇</span>
+              <p>
+                Seus lotes arrematados e os respectivos comprovantes aparecerão aqui assim que você
+                vencer um pregão.
+              </p>
+              <Link href="/#auctions" className="button button-outline compact">
+                Explorar lotes ao vivo →
+              </Link>
+            </div>
+          )}
+
+          <div className="wallet-tip">
+            <span>◇</span>
+            <p>
+              <b>Como funciona a reserva de saldo:</b> Ao liderar um lote, o valor do seu lance
+              migra do saldo disponível para o saldo comprometido. Caso outro licitante supere seu
+              lance, o valor retorna integralmente ao seu saldo disponível no mesmo instante.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function AuditView({ id }: { id: string }) {
   const [audit, setAudit] = useState<any>(null);
-  useEffect(() => { apiFetch(`/audit/lots/${id}`).then(r => r.json()).then(setAudit); }, [id]);
-  if (!audit) return <div className="page-loader"><span className="loader" />Verificando histórico…</div>;
-  return <section className="public-page"><div className="breadcrumb"><Link href={`/lots/${id}`}>Voltar ao lote</Link><span> / </span><span>Auditoria pública</span></div><span className="eyebrow">REGISTRO ABERTO</span><h1>Uma história que pode ser verificada.</h1><p className="public-subtitle">Histórico de lances de <b>{audit.title}</b>. Cada evento referencia criptograficamente o anterior.</p><div className={`integrity-banner ${audit.valid ? 'valid' : 'invalid'}`}><span>{audit.valid ? '✓' : '!'}</span><div><b>{audit.valid ? 'Histórico íntegro' : 'Integridade comprometida'}</b><small>{audit.valid ? 'A sequência de hashes corresponde aos eventos registrados.' : 'Um ou mais eventos foram alterados, removidos ou inseridos.'}</small></div><span className="integrity-label">{audit.valid ? 'VERIFICADO' : 'FALHA'}</span></div><div className="audit-list">{audit.events.length ? audit.events.map((event: any) => <article className="audit-event" key={event.sequence}><span className="audit-sequence">{String(event.sequence).padStart(3, '0')}</span><div className="audit-event-copy"><b>{event.type === 'bid_placed' ? `${event.bidder} deu um lance` : event.type === 'lot_closed' ? 'Leilão encerrado' : 'Lote cancelado'}</b><span>{event.amountCents ? brl(event.amountCents / 100) : event.winningBidCents ? brl(event.winningBidCents / 100) : '—'} · {when(event.createdAt)}</span><details><summary>Hash do evento</summary><code>{event.eventHash}</code><small>Anterior: {event.previousHash}</small></details></div></article>) : <div className="small-empty">Este lote ainda não tem eventos no histórico.</div>}</div><p className="audit-footnote">Os licitantes são representados por identificadores pseudônimos. A verificação recalcula a cadeia SHA-256 a partir do primeiro evento.</p></section>;
+  const [copiedHash, setCopiedHash] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch(`/audit/lots/${id}`)
+      .then(r => r.json())
+      .then(setAudit);
+  }, [id]);
+
+  if (!audit) {
+    return (
+      <div className="page-loader">
+        <span className="loader" />
+        <span>Recalculando cadeia criptográfica SHA-256…</span>
+      </div>
+    );
+  }
+
+  const copyHash = async (hash: string) => {
+    try {
+      await navigator.clipboard.writeText(hash);
+      setCopiedHash(hash);
+      window.setTimeout(() => setCopiedHash(null), 2000);
+    } catch {
+      // ignore
+    }
+  };
+
+  return (
+    <section className="public-page">
+      <div className="breadcrumb">
+        <Link href={`/lots/${id}`}>← Voltar à sala do lote</Link>
+        <span>/</span>
+        <span>Auditoria Criptográfica Pública</span>
+      </div>
+
+      <span className="eyebrow">TRANSPARÊNCIA PÚBLICA · ACESSO SEM LOGIN</span>
+      <h1>Trilha de Auditoria SHA-256</h1>
+      <p className="public-subtitle">
+        Verificação independente do histórico de lances do lote <b>{audit.title}</b>. Todos os
+        registros são append-only e encadeados criptograficamente desde o bloco <code>GENESIS</code>.
+      </p>
+
+      <div className={`integrity-banner ${audit.valid ? 'valid' : 'invalid'}`}>
+        <span className="integrity-icon">{audit.valid ? '✓' : '!'}</span>
+        <div className="integrity-copy">
+          <b>
+            {audit.valid
+              ? 'Histórico Íntegro — Cadeia SHA-256 Validada'
+              : 'Alerta: Divergência Criptográfica Detectada'}
+          </b>
+          <small>
+            {audit.valid
+              ? `Todos os ${audit.events?.length ?? 0} eventos foram recalculados e correspondem exatamente ao hash de ponta (${audit.auditTipHash?.slice(0, 16) ?? 'GENESIS'}…).`
+              : 'Um ou mais eventos foram alterados, removidos ou inseridos fora da sequência.'}
+          </small>
+        </div>
+        <span className="integrity-label">{audit.valid ? 'VERIFICADO' : 'FALHA'}</span>
+      </div>
+
+      <div className="audit-summary-bar">
+        <div>
+          <span>LOTE AUDITADO</span>
+          <strong>#{id.slice(0, 8).toUpperCase()}</strong>
+        </div>
+        <div>
+          <span>EVENTOS REGISTRADOS</span>
+          <strong>{audit.events?.length ?? 0}</strong>
+        </div>
+        <div>
+          <span>HASH DE PONTA (TIP HASH)</span>
+          <code>{audit.auditTipHash ?? 'GENESIS'}</code>
+        </div>
+      </div>
+
+      <div className="audit-list">
+        {audit.events?.length ? (
+          audit.events.map((event: any) => (
+            <article className="audit-event" key={event.sequence}>
+              <div className="audit-sequence">
+                <span>BLOCO</span>
+                <strong>#{String(event.sequence).padStart(3, '0')}</strong>
+              </div>
+
+              <div className="audit-event-copy">
+                <div className="audit-event-header">
+                  <b>
+                    {event.type === 'bid_placed'
+                      ? `${event.bidder} ofertou um lance`
+                      : event.type === 'lot_closed'
+                        ? 'Pregão encerrado e liquidado'
+                        : 'Lote cancelado pelo leiloeiro'}
+                  </b>
+                  <span className="audit-amount-badge">
+                    {event.amountCents
+                      ? brl(event.amountCents / 100)
+                      : event.winningBidCents
+                        ? `Arremate: ${brl(event.winningBidCents / 100)}`
+                        : 'Sem valor'}
+                  </span>
+                </div>
+                <span className="audit-timestamp">
+                  Registrado em {whenFull(event.createdAt)} · Tipo: <code>{event.type}</code>
+                </span>
+
+                <div className="audit-hashes">
+                  <div className="hash-line">
+                    <span>Hash Anterior:</span>
+                    <code>{event.previousHash}</code>
+                  </div>
+                  <div className="hash-line current-hash">
+                    <span>Hash SHA-256:</span>
+                    <code>{event.eventHash}</code>
+                    <button
+                      type="button"
+                      className="copy-hash-btn"
+                      onClick={() => copyHash(event.eventHash)}
+                    >
+                      {copiedHash === event.eventHash ? 'Copiado ✓' : 'Copiar'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </article>
+          ))
+        ) : (
+          <div className="small-empty">
+            Este lote ainda se encontra no estado inicial (GENESIS) sem eventos de lance registrados.
+          </div>
+        )}
+      </div>
+
+      <p className="audit-footnote">
+        Para preservar a privacidade na disputa, os licitantes são identificados por pseudônimos
+        determinísticos. A fórmula de verificação executada é{' '}
+        <code>SHA256(previousHash + canonicalJSON(payload))</code>.
+      </p>
+    </section>
+  );
 }
 
 function ReceiptView({ token }: { token: string }) {
-  const [receipt, setReceipt] = useState<any>(null); const [error, setError] = useState(''); const [copied, setCopied] = useState(false);
-  useEffect(() => { apiFetch(`/receipts/${token}`).then(async r => { const data = await r.json(); if (!r.ok) setError(data.error); else setReceipt(data); }); }, [token]);
-  if (error) return <section className="public-page"><div className="empty-state"><span className="empty-icon">◇</span><b>{error}</b><Link className="button button-outline" href="/">Voltar à galeria</Link></div></section>;
-  if (!receipt) return <div className="page-loader"><span className="loader" />Abrindo comprovante…</div>;
-  return <section className="receipt-page"><div className="receipt-check">✓</div><span className="eyebrow">COMPROVANTE DE ARREMATE</span><h1>Uma nova história<br /><em>começa agora.</em></h1><div className="receipt-card"><Artwork src={receipt.imageUrl} title={receipt.title} /><div className="receipt-copy"><span>LOTE ARREMATADO</span><h2>{receipt.title}</h2><div className="receipt-line"><span>Valor final</span><b>{brl(receipt.amount)}</b></div><div className="receipt-line"><span>Arrematante</span><b>{receipt.winner}</b></div><div className="receipt-line"><span>Encerrado em</span><b>{when(receipt.closedAt)}</b></div><div className="receipt-verified">✓ Comprovante público · lance verificado</div></div></div><div className="receipt-actions"><Link className="button button-dark" href={`/audit/${receipt.lotId}`}>Ver auditoria pública ↗</Link><button className="button button-outline" onClick={async () => { try { await navigator.clipboard.writeText(window.location.href); setCopied(true); } catch { setCopied(false); } }}>{copied ? 'Link copiado ✓' : 'Compartilhar comprovante ↗'}</button><Link href="/" className="text-link">Voltar à galeria</Link></div><small className="receipt-token">Código do comprovante · {receipt.token.slice(0, 12).toUpperCase()}</small></section>;
+  const [receipt, setReceipt] = useState<any>(null);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    apiFetch(`/receipts/${token}`).then(async r => {
+      const data = await r.json();
+      if (!r.ok) setError(data.error);
+      else setReceipt(data);
+    });
+  }, [token]);
+
+  if (error) {
+    return (
+      <section className="public-page">
+        <div className="empty-state">
+          <span className="empty-icon">◇</span>
+          <b>{error}</b>
+          <Link className="button button-outline" href="/">
+            Voltar à vitrine de leilões
+          </Link>
+        </div>
+      </section>
+    );
+  }
+  if (!receipt) {
+    return (
+      <div className="page-loader">
+        <span className="loader" />
+        <span>Emitindo comprovante de arremate…</span>
+      </div>
+    );
+  }
+
+  const artist =
+    receipt.artwork?.artist ?? receipt.artwork?.artist_title ?? 'Acervo Catalogado';
+  const year = receipt.artwork?.date ?? receipt.artwork?.date_display ?? '';
+
+  return (
+    <section className="receipt-page">
+      <div className="receipt-header">
+        <div className="receipt-check">✓</div>
+        <span className="eyebrow">CERTIFICADO PÚBLICO DE ARREMATE · LANCEARTE</span>
+        <h1>Comprovante Oficial de Arremate</h1>
+        <p>
+          Documento público verificável de encerramento e liquidação de lote em pregão eletrônico.
+        </p>
+      </div>
+
+      <div className="receipt-card">
+        <div className="receipt-media">
+          <Artwork src={receipt.imageUrl} title={receipt.title} />
+          <span className="receipt-lot-tag">LOTE #{receipt.lotId.slice(0, 6).toUpperCase()}</span>
+        </div>
+
+        <div className="receipt-copy">
+          <span className="receipt-kicker">OBRA ARREMATADA</span>
+          <h2>{receipt.title}</h2>
+          <p className="receipt-artist">
+            {artist}
+            {year ? ` · ${year}` : ''}
+          </p>
+
+          <div className="receipt-lines">
+            <div className="receipt-line highlight">
+              <span>Valor Final de Arremate</span>
+              <b>{brl(receipt.amount)}</b>
+            </div>
+            {receipt.openingBid && (
+              <div className="receipt-line">
+                <span>Lance Inicial</span>
+                <b>{brl(receipt.openingBid)}</b>
+              </div>
+            )}
+            <div className="receipt-line">
+              <span>Licitante Vencedor</span>
+              <b>{receipt.winner}</b>
+            </div>
+            {receipt.sellerName && (
+              <div className="receipt-line">
+                <span>Leiloeiro Responsável</span>
+                <b>{receipt.sellerName}</b>
+              </div>
+            )}
+            <div className="receipt-line">
+              <span>Data e Hora do Arremate</span>
+              <b>{whenFull(receipt.closedAt)}</b>
+            </div>
+            <div className="receipt-line">
+              <span>Código de Autenticidade</span>
+              <code>{receipt.token.slice(0, 16).toUpperCase()}</code>
+            </div>
+          </div>
+
+          <div className="receipt-verified">
+            <span>✓</span>
+            <div>
+              <b>Arremate liquidado e auditado via SHA-256</b>
+              <small>Qualquer pessoa com este link pode confirmar a autenticidade do lote.</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="receipt-actions">
+        <button
+          className="button button-primary"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(window.location.href);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 3000);
+            } catch {
+              setCopied(false);
+            }
+          }}
+        >
+          {copied ? '✓ Link do comprovante copiado!' : 'Compartilhar link do comprovante ↗'}
+        </button>
+        <Link className="button button-outline" href={`/audit/${receipt.lotId}`}>
+          Auditar histórico SHA-256 ↗
+        </Link>
+        <Link className="button button-quiet" href={`/lots/${receipt.lotId}`}>
+          Abrir página do lote
+        </Link>
+      </div>
+    </section>
+  );
 }
 
-function AccessNotice({ title, message }: { title: string; message: string }) {
-  return <section className="access-notice"><span className="empty-icon">◇</span><span className="eyebrow">Entrada na galeria</span><h1>{title}</h1><p>{message}</p><Link className="button button-dark" href="/">Voltar à galeria</Link></section>;
+function AccessNotice({
+  title,
+  message,
+  onLogin
+}: {
+  title: string;
+  message: string;
+  onLogin?: () => void;
+}) {
+  return (
+    <section className="access-notice">
+      <span className="empty-icon">◇</span>
+      <span className="eyebrow">CONTROLE DE ACESSO POR PAPEL</span>
+      <h1>{title}</h1>
+      <p>{message}</p>
+      <div className="access-notice-actions">
+        {onLogin && (
+          <button className="button button-primary" onClick={onLogin}>
+            Alternar conta / Entrar
+          </button>
+        )}
+        <Link className="button button-outline" href="/">
+          Voltar à vitrine de lotes
+        </Link>
+      </div>
+    </section>
+  );
 }

@@ -63,7 +63,10 @@ function publicLot(row: any) {
     startsAt: row.starts_at, endsAt: row.ends_at, status: row.status,
     currentBid: row.current_bid_cents == null ? null : money(row.current_bid_cents),
     leader: row.current_leader_id ? pseudonym(row.current_leader_id) : null, receiptToken: row.receipt_token ?? null,
-    sellerName: row.seller_name ?? 'Leiloeiro'
+    sellerId: row.seller_id,
+    sellerName: row.seller_name ?? 'Leiloeiro',
+    bidCount: Number(row.bid_count ?? 0),
+    auditCount: Number(row.audit_count ?? 0)
   };
 }
 function publicImageUrl(value: unknown): string | null {
@@ -202,19 +205,19 @@ app.get<{ Querystring: { status?: string } }>('/lots', async request => {
   await refreshLots();
   const allowed = ['scheduled', 'live', 'closed', 'cancelled'];
   const status = allowed.includes(request.query.status ?? '') ? request.query.status : null;
-  const result = await pool.query(`SELECT lots.*, users.name AS seller_name FROM lots JOIN users ON users.id=lots.seller_id ${status ? 'WHERE lots.status=$1' : "WHERE lots.status <> 'cancelled'"} ORDER BY CASE lots.status WHEN 'live' THEN 0 WHEN 'scheduled' THEN 1 ELSE 2 END, lots.ends_at`, status ? [status] : []);
+  const result = await pool.query(`SELECT lots.*, users.name AS seller_name, receipts.token AS receipt_token, (SELECT count(*)::int FROM bids WHERE bids.lot_id=lots.id) AS bid_count FROM lots JOIN users ON users.id=lots.seller_id LEFT JOIN receipts ON receipts.lot_id=lots.id ${status ? 'WHERE lots.status=$1' : "WHERE lots.status <> 'cancelled'"} ORDER BY CASE lots.status WHEN 'live' THEN 0 WHEN 'scheduled' THEN 1 ELSE 2 END, lots.ends_at`, status ? [status] : []);
   return result.rows.map(publicLot);
 });
 app.get<{ Params: { id: string } }>('/lots/:id', async (request, reply) => {
   await refreshLots();
-  const result = await pool.query('SELECT lots.*, users.name AS seller_name, receipts.token AS receipt_token FROM lots JOIN users ON users.id=lots.seller_id LEFT JOIN receipts ON receipts.lot_id=lots.id WHERE lots.id=$1', [request.params.id]);
+  const result = await pool.query('SELECT lots.*, users.name AS seller_name, receipts.token AS receipt_token, (SELECT count(*)::int FROM bids WHERE bids.lot_id=lots.id) AS bid_count FROM lots JOIN users ON users.id=lots.seller_id LEFT JOIN receipts ON receipts.lot_id=lots.id WHERE lots.id=$1', [request.params.id]);
   if (!result.rowCount || result.rows[0].status === 'cancelled') return reply.code(404).send({ error: 'Lote não encontrado.' });
   const user = await currentUser(request);
   return { ...publicLot(result.rows[0]), isCurrentUserLeader: Boolean(user && result.rows[0].current_leader_id === user.id) };
 });
 app.get('/auctioneer/lots', async request => {
   const seller = await requireUser(request, 'auctioneer');
-  const result = await pool.query('SELECT lots.*, users.name AS seller_name FROM lots JOIN users ON users.id=lots.seller_id WHERE lots.seller_id=$1 ORDER BY lots.created_at DESC', [seller.id]);
+  const result = await pool.query('SELECT lots.*, users.name AS seller_name, receipts.token AS receipt_token, (SELECT count(*)::int FROM bids WHERE bids.lot_id=lots.id) AS bid_count FROM lots JOIN users ON users.id=lots.seller_id LEFT JOIN receipts ON receipts.lot_id=lots.id WHERE lots.seller_id=$1 ORDER BY lots.created_at DESC', [seller.id]);
   return result.rows.map(publicLot);
 });
 app.get<{ Params: { id: string } }>('/lots/:id/bids', async (request, reply) => {
@@ -233,10 +236,17 @@ app.post<{ Body: { sourceId?: string; openingBid?: number; increment?: number; s
     if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) throw new Error('O horário final precisa ser posterior ao início.');
     const openingCents = centsFromMoney(openingBid);
     const incrementCents = centsFromMoney(increment);
-    const response = await fetch(`https://api.artic.edu/api/v1/artworks/${encodeURIComponent(sourceId)}?fields=id,title,artist_title,date_display,is_public_domain,image_id`, { headers: { 'AIC-User-Agent': process.env.AIC_USER_AGENT ?? 'LanceArte/1.0 (local development)' }, signal: AbortSignal.timeout(8000) });
-    if (!response.ok) throw new Error('Não foi possível confirmar a obra na API agora. Tente novamente mais tarde.');
-    const payload = await response.json() as any;
-    const artwork = itemFromAic(payload);
+    let artwork: ReturnType<typeof itemFromAic>;
+    if (sourceId === 'portinari-16371') {
+      artwork = { id: 'portinari-16371', title: 'Café', artist: 'Candido Portinari', date: '1935', publicDomain: false, imageUrl: 'https://acervo-portinari.s3.sa-east-1.amazonaws.com/f5ca02363ab4193d5feccce408eb5220.jpeg', sourceUrl: 'https://www.portinari.org.br/acervo/obras/16371/cafe' };
+    } else if (sourceId === 'lacma-78-7') {
+      artwork = { id: 'lacma-78-7', title: 'A Traição das Imagens (Isto não é um cachimbo)', artist: 'René Magritte', date: '1929', publicDomain: false, imageUrl: 'https://collections-images.lacma.org/images/31931/31931-1-primary.webp', sourceUrl: 'https://collections.lacma.org/node/239578' };
+    } else {
+      const response = await fetch(`https://api.artic.edu/api/v1/artworks/${encodeURIComponent(sourceId)}?fields=id,title,artist_title,date_display,is_public_domain,image_id`, { headers: { 'AIC-User-Agent': process.env.AIC_USER_AGENT ?? 'LanceArte/1.0 (local development)' }, signal: AbortSignal.timeout(8000) });
+      if (!response.ok) throw new Error('Não foi possível confirmar a obra na API agora. Tente novamente mais tarde.');
+      const payload = await response.json() as any;
+      artwork = itemFromAic(payload);
+    }
     const result = await pool.query("INSERT INTO lots(seller_id, source_id, artwork, title, image_url, opening_bid_cents, increment_cents, starts_at, ends_at, status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,CASE WHEN $8 <= now() THEN 'live' ELSE 'scheduled' END) RETURNING *", [seller.id, artwork.id, artwork, artwork.title, artwork.imageUrl, openingCents, incrementCents, start, end]);
     return reply.code(201).send(publicLot({ ...result.rows[0], seller_name: seller.name }));
   } catch (error) { return errorReply(error, reply); }
@@ -303,8 +313,26 @@ app.post<{ Params: { id: string }; Body: { amount?: number } }>('/lots/:id/bids'
 app.get('/wallet/me', async (request, reply) => {
   try {
     const user = await requireUser(request, 'bidder');
-    const result = await pool.query('SELECT COALESCE(sum(available_delta_cents),0)::bigint AS available, COALESCE(sum(committed_delta_cents),0)::bigint AS committed FROM wallet_transactions WHERE user_id=$1', [user.id]);
-    return { user: { id: user.id, name: user.name }, available: money(result.rows[0].available), committed: money(result.rows[0].committed), total: money(BigInt(result.rows[0].available) + BigInt(result.rows[0].committed)) };
+    const [result, txResult] = await Promise.all([
+      pool.query('SELECT COALESCE(sum(available_delta_cents),0)::bigint AS available, COALESCE(sum(committed_delta_cents),0)::bigint AS committed FROM wallet_transactions WHERE user_id=$1', [user.id]),
+      pool.query('SELECT wallet_transactions.id, wallet_transactions.lot_id, wallet_transactions.kind, wallet_transactions.available_delta_cents, wallet_transactions.committed_delta_cents, wallet_transactions.note, wallet_transactions.created_at, lots.title AS lot_title FROM wallet_transactions LEFT JOIN lots ON lots.id=wallet_transactions.lot_id WHERE wallet_transactions.user_id=$1 ORDER BY wallet_transactions.created_at DESC LIMIT 20', [user.id])
+    ]);
+    return {
+      user: { id: user.id, name: user.name },
+      available: money(result.rows[0].available),
+      committed: money(result.rows[0].committed),
+      total: money(BigInt(result.rows[0].available) + BigInt(result.rows[0].committed)),
+      transactions: txResult.rows.map((row: any) => ({
+        id: row.id,
+        lotId: row.lot_id,
+        lotTitle: row.lot_title,
+        kind: row.kind,
+        availableDelta: money(row.available_delta_cents),
+        committedDelta: money(row.committed_delta_cents),
+        note: row.note,
+        createdAt: row.created_at
+      }))
+    };
   } catch (error) { return errorReply(error, reply); }
 });
 app.post<{ Body: { amount?: number } }>('/wallet/deposits', async (request, reply) => {
@@ -328,17 +356,38 @@ app.get('/wallet/wins', async (request, reply) => {
 });
 
 app.get<{ Params: { id: string } }>('/audit/lots/:id', async (request, reply) => {
-  const lot = await pool.query('SELECT id, title, audit_count, audit_tip_hash FROM lots WHERE id=$1', [request.params.id]);
+  const lot = await pool.query('SELECT id, title, artwork, status, audit_count, audit_tip_hash FROM lots WHERE id=$1', [request.params.id]);
   if (!lot.rowCount) return reply.code(404).send({ error: 'Lote não encontrado.' });
   const result = await pool.query('SELECT sequence, event_type, payload, previous_hash, event_hash, created_at FROM audit_events WHERE lot_id=$1 ORDER BY sequence ASC', [request.params.id]);
   const valid = auditMatchesCheckpoint(result.rows.map((row: any) => ({ previousHash: row.previous_hash, eventHash: row.event_hash, payload: row.payload })), Number(lot.rows[0].audit_count), lot.rows[0].audit_tip_hash);
-  return { lotId: request.params.id, title: lot.rows[0].title, valid, events: result.rows.map((row: any) => ({ sequence: row.sequence, type: row.event_type, ...row.payload, previousHash: row.previous_hash, eventHash: row.event_hash, createdAt: row.created_at })) };
+  return {
+    lotId: request.params.id,
+    title: lot.rows[0].title,
+    artwork: lot.rows[0].artwork,
+    status: lot.rows[0].status,
+    auditCount: Number(lot.rows[0].audit_count),
+    auditTipHash: lot.rows[0].audit_tip_hash,
+    valid,
+    events: result.rows.map((row: any) => ({ sequence: row.sequence, type: row.event_type, ...row.payload, previousHash: row.previous_hash, eventHash: row.event_hash, createdAt: row.created_at }))
+  };
 });
 app.get<{ Params: { token: string } }>('/receipts/:token', async (request, reply) => {
-  const result = await pool.query('SELECT receipts.token, lots.id AS lot_id, lots.title, lots.image_url, lots.current_bid_cents, lots.current_leader_id, lots.status, lots.ends_at FROM receipts JOIN lots ON lots.id=receipts.lot_id WHERE receipts.token=$1', [request.params.token]);
+  const result = await pool.query('SELECT receipts.token, lots.id AS lot_id, lots.title, lots.artwork, lots.image_url, lots.opening_bid_cents, lots.current_bid_cents, lots.current_leader_id, lots.status, lots.ends_at, users.name AS seller_name, (SELECT count(*)::int FROM bids WHERE bids.lot_id=lots.id) AS bid_count FROM receipts JOIN lots ON lots.id=receipts.lot_id JOIN users ON users.id=lots.seller_id WHERE receipts.token=$1', [request.params.token]);
   const row = result.rows[0];
   if (!row || row.status !== 'closed' || !row.current_leader_id) return reply.code(404).send({ error: 'Comprovante ainda não disponível.' });
-  return { token: row.token, lotId: row.lot_id, title: row.title, imageUrl: publicImageUrl(row.image_url), amount: money(row.current_bid_cents), winner: pseudonym(row.current_leader_id), closedAt: row.ends_at };
+  return {
+    token: row.token,
+    lotId: row.lot_id,
+    title: row.title,
+    artwork: row.artwork,
+    imageUrl: publicImageUrl(row.image_url),
+    openingBid: money(row.opening_bid_cents),
+    amount: money(row.current_bid_cents),
+    winner: pseudonym(row.current_leader_id),
+    sellerName: row.seller_name,
+    bidCount: Number(row.bid_count ?? 0),
+    closedAt: row.ends_at
+  };
 });
 
 socket.on('connection', client => {
