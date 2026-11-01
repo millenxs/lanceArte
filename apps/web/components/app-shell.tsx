@@ -38,7 +38,7 @@ function LotCard({ lot }: { lot: Lot }) {
       <div className="lot-card-meta"><Status value={lot.status} /><span>{lot.status === 'live' ? 'Termina' : 'Início'} {when(lot.status === 'live' ? lot.endsAt : lot.startsAt)}</span></div>
       <h3>{lot.title}</h3>
       <p>{lot.artwork?.artist ?? lot.artwork?.artist_title ?? 'Coleção LanceArte'}</p>
-      <div className="lot-card-price"><span>{lot.status === 'live' ? 'Lance atual' : 'Lance inicial'}</span><Money>{brl(lot.currentBid ?? lot.openingBid)}</Money></div>
+      <div className="lot-card-price"><span>{lot.status === 'live' ? 'Lance atual' : lot.status === 'closed' ? lot.currentBid === null ? 'Sem arremate' : 'Arrematado por' : 'Lance inicial'}</span><Money>{lot.currentBid === null && lot.status === 'closed' ? '—' : brl(lot.currentBid ?? lot.openingBid)}</Money></div>
       <div className="lot-card-footer"><span>Incremento {brl(lot.increment)}</span><b>{lot.status === 'live' ? 'Dar lance' : lot.status === 'scheduled' ? 'Ver lote' : 'Ver resultado'} <span aria-hidden="true">→</span></b></div>
     </div>
   </Link>;
@@ -62,7 +62,7 @@ function ShellLayout({ children, user, onLogin, onLogout, theme, onToggleTheme }
     <div className="auction-ribbon"><span><i />PREGÃO DIGITAL</span><b>Arte em disputa, em tempo real</b><span className="ribbon-note">Lances e saldos demonstrativos</span></div>
     <header className="topbar">
       <Link href="/" className="brand"><span className="brand-mark">{mark}</span><span>lance<span>arte</span></span></Link>
-      <nav className="main-nav"><Link href="/#auctions">Todos os lotes</Link>{user?.role === 'auctioneer' && <Link href="/console">Painel do leiloeiro</Link>}{user?.role === 'bidder' && <Link href="/wallet">Minha carteira</Link>}<Link href="/#how-it-works">Como participar</Link></nav>
+      <nav className="main-nav"><Link href="/#auctions">Todos os lotes</Link><Link href="/#featured-auction">Pregão em destaque</Link>{user?.role === 'auctioneer' && <Link href="/console">Painel do leiloeiro</Link>}{user?.role === 'bidder' && <Link href="/wallet">Minha carteira</Link>}</nav>
       <div className="account-area">
         <button className="theme-toggle" type="button" onClick={onToggleTheme} aria-label={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'} aria-pressed={theme === 'dark'} title={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}><span aria-hidden="true">{theme === 'dark' ? '☼' : '☾'}</span><small>{theme === 'dark' ? 'Claro' : 'Escuro'}</small></button>
         {user ? <><span className="user-chip"><span className="avatar">{user.name.slice(0, 1)}</span><span>{user.name}<small>{user.role === 'auctioneer' ? 'Leiloeiro' : 'Licitante'}</small></span></span><button className="button button-quiet compact" onClick={onLogout}>Sair</button></> : <button className="button button-dark compact" onClick={onLogin}>Entrar</button>}
@@ -176,24 +176,34 @@ function HomeView({ onLogin }: { onLogin: () => void }) {
     return matchesStatus && searchableText.includes(search.trim().toLocaleLowerCase('pt-BR'));
   });
   const liveCount = lots.filter(lot => lot.status === 'live').length;
-  const featuredLot = lots.find(lot => lot.status === 'live');
+  const featuredLot = filter === 'all'
+    ? shown.find(lot => lot.status === 'live') ?? shown.find(lot => lot.status === 'scheduled')
+    : shown[0];
+  const categories = [
+    ['all', 'Todos os lotes', lots.filter(lot => lot.status !== 'cancelled').length],
+    ['live', 'Ao vivo', liveCount],
+    ['scheduled', 'Em breve', lots.filter(lot => lot.status === 'scheduled').length],
+    ['closed', 'Encerrados', lots.filter(lot => lot.status === 'closed').length]
+  ] as const;
   return <>
-    <section className="marketplace-heading">
-      <div className="marketplace-title"><div><span className="eyebrow">LANCEARTE · LEILÕES DE ARTE</span><h1>Obras em disputa</h1><p>Explore os lotes, acompanhe os lances e encontre sua próxima obra.</p></div><div className="marketplace-live"><i /><strong>{liveCount.toString().padStart(2, '0')}</strong><span>leilões<br />ao vivo</span></div></div>
-      <label className="gallery-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="Buscar obra ou artista" placeholder="Busque por obra ou artista" value={search} onChange={event => setSearch(event.target.value)} /><kbd>⌕</kbd></label>
-    </section>
-    {featuredLot && <section className="featured-auction" aria-label="Lote ao vivo em destaque">
+    <nav className="auction-categories" aria-label="Categorias de leilões">
+      {categories.map(([value, label, count]) => <button key={value} type="button" className={filter === value ? 'selected' : ''} aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}<span>{count}</span></button>)}
+    </nav>
+    {featuredLot && <section className="featured-auction" id="featured-auction" aria-label="Leilão em destaque">
       <div className="featured-art"><Artwork src={featuredLot.imageUrl} title={featuredLot.title} /></div>
       <div className="featured-copy">
-        <div className="featured-kicker"><Status value={featuredLot.status} /><span>Lote ao vivo em destaque</span></div>
+        <div className="featured-kicker"><Status value={featuredLot.status} /><span>{featuredLot.status === 'live' ? 'Pregão em andamento' : featuredLot.status === 'scheduled' ? 'Próximo pregão' : 'Leilão encerrado'}</span></div>
         <h2>{featuredLot.title}</h2>
         <p className="featured-artist">{featuredLot.artwork?.artist ?? featuredLot.artwork?.artist_title ?? 'Acervo LanceArte'}{(featuredLot.artwork?.date ?? featuredLot.artwork?.date_display) ? ` · ${featuredLot.artwork?.date ?? featuredLot.artwork?.date_display}` : ''}</p>
-        <div className="featured-facts"><div><span>Lance atual</span><strong>{brl(featuredLot.currentBid ?? featuredLot.openingBid)}</strong></div><div><span>Próximo lance</span><strong>{brl(featuredLot.currentBid === null ? featuredLot.openingBid : featuredLot.currentBid + featuredLot.increment)}</strong></div><div><span>Encerra</span><strong>{when(featuredLot.endsAt)}</strong></div></div>
-        <div className="featured-actions"><Link className="button button-dark" href={`/lots/${featuredLot.id}`}>Entrar na sala e licitar <span>↗</span></Link><Link className="featured-audit" href={`/audit/${featuredLot.id}`}>Consultar histórico público</Link></div>
+        <div className="featured-price"><span>{featuredLot.status === 'live' ? 'Lance atual' : featuredLot.status === 'closed' ? featuredLot.currentBid === null ? 'Sem arremate' : 'Arrematado por' : 'Lance inicial'}</span><strong>{featuredLot.currentBid === null && featuredLot.status === 'closed' ? '—' : brl(featuredLot.currentBid ?? featuredLot.openingBid)}</strong></div>
+        <div className="featured-facts"><div><span>{featuredLot.status === 'live' ? 'Próximo lance' : featuredLot.status === 'closed' ? 'Encerrado em' : 'Abertura'}</span><strong>{featuredLot.status === 'live' ? brl(featuredLot.currentBid === null ? featuredLot.openingBid : featuredLot.currentBid + featuredLot.increment) : when(featuredLot.status === 'closed' ? featuredLot.endsAt : featuredLot.startsAt)}</strong></div><div><span>{featuredLot.status === 'live' ? 'Encerra' : 'Incremento mínimo'}</span><strong>{featuredLot.status === 'live' ? when(featuredLot.endsAt) : brl(featuredLot.increment)}</strong></div></div>
+        <div className="featured-actions"><Link className="button button-dark" href={`/lots/${featuredLot.id}`}>{featuredLot.status === 'live' ? 'Dar lance' : featuredLot.status === 'closed' ? 'Ver resultado' : 'Ver lote'} <span>↗</span></Link></div>
       </div>
     </section>}
-    <section className="auction-section" id="auctions"><div className="catalog-toolbar"><div className="catalog-categories" aria-label="Filtrar lotes">{[['all', 'Todos os lotes'], ['live', 'Ao vivo'], ['scheduled', 'Em breve'], ['closed', 'Encerrados']].map(([value, label]) => <button key={value} className={`filter-pill ${filter === value ? 'active' : ''}`} onClick={() => setFilter(value)}>{label}{value === 'live' && <span>{liveCount}</span>}</button>)}</div><span className="lot-count">{shown.length} {shown.length === 1 ? 'lote' : 'lotes'}</span></div>{loading ? <div className="empty-state"><span className="loader" />Carregando os lotes…</div> : error ? <div className="empty-state"><span className="empty-icon">⌁</span><b>Não foi possível carregar os leilões.</b><span>A conexão com a plataforma não respondeu. Verifique se a API está disponível e tente novamente.</span><button className="button button-outline" onClick={() => setLoadAttempt(value => value + 1)}>Tentar novamente ↻</button></div> : shown.length ? <div className="lot-grid">{shown.map(lot => <LotCard lot={lot} key={lot.id} />)}</div> : <div className="empty-state"><span className="empty-icon">◇</span><b>Nenhum lote por aqui ainda.</b><span>Os próximos leilões aparecem nesta galeria assim que forem publicados.</span><button className="button button-outline" onClick={onLogin}>Acessar o acervo</button></div>}</section>
-    <section className="marketplace-assurances" id="how-it-works"><span><b>01</b> Depósitos simulados</span><span><b>02</b> Disputa em tempo real</span><span><b>03</b> Histórico público e verificável</span></section>
+    <section className="auction-section" id="auctions">
+      <div className="catalog-heading"><div><span className="eyebrow">ACERVO LANCEARTE</span><h1>Lotes em destaque &amp; disputa</h1><p>{shown.length} {shown.length === 1 ? 'lote no acervo' : 'lotes no acervo'}</p></div><label className="gallery-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="Buscar obra ou artista" placeholder="Buscar obra ou artista" value={search} onChange={event => setSearch(event.target.value)} /><kbd>⌕</kbd></label></div>
+      {loading ? <div className="empty-state"><span className="loader" />Carregando os lotes…</div> : error ? <div className="empty-state"><span className="empty-icon">⌁</span><b>Não foi possível carregar os leilões.</b><span>A conexão com a plataforma não respondeu. Verifique se a API está disponível e tente novamente.</span><button className="button button-outline" onClick={() => setLoadAttempt(value => value + 1)}>Tentar novamente ↻</button></div> : shown.length ? <div className="lot-grid">{shown.map(lot => <LotCard lot={lot} key={lot.id} />)}</div> : <div className="empty-state"><span className="empty-icon">◇</span><b>Nenhum lote por aqui ainda.</b><span>Os próximos leilões aparecem nesta galeria assim que forem publicados.</span><button className="button button-outline" onClick={onLogin}>Acessar o acervo</button></div>}
+    </section>
   </>;
 }
 
