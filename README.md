@@ -10,6 +10,7 @@ Casa de leilões de obras de arte, criada para o teste técnico Elite Dev da Ver
 - Carteira de demonstração com depósitos, saldo disponível e comprometido, reserva e liquidação do lance vencedor.
 - Comprovante de arremate com link público e histórico público com verificação da cadeia SHA-256.
 - Cadastro e login por e-mail, senha armazenada com hash e escolha de papel no cadastro.
+- Tema claro e escuro, com preferência salva no navegador e respeito ao tema do sistema na primeira visita.
 - Credenciais de teste para experimentar o acervo como licitante ou leiloeiro.
 
 Todos os valores são simulados; não há pagamentos reais.
@@ -98,7 +99,7 @@ Depois do primeiro deploy, confirme que `/health` da API responde e que a URL da
 - Senhas são verificadas com scrypt e nunca armazenadas em texto puro. Sessões usam cookie `HttpOnly`.
 - A carteira, depósitos e liquidação servem apenas para demonstrar regras de negócio.
 - Os eventos de auditoria são append-only no PostgreSQL e formam uma cadeia SHA-256 por lote. A página pública recalcula essa cadeia e detecta divergências nos registros apresentados.
-- Cancelamento é permitido somente antes do primeiro lance. Busca e filtro de lotes e tema escuro podem ser ampliados depois dos fluxos exigidos.
+- Cancelamento é permitido somente antes do primeiro lance; como lances em disputa não podem ser cancelados, não há estorno automático nesse fluxo. A vitrine oferece busca e filtros por estado do lote.
 
 ## Verificações automatizadas
 

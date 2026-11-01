@@ -56,9 +56,21 @@ function LiveBidTicker({ bids }: { bids: Bid[] }) {
     </div>
   </div>;
 }
-function ShellLayout({ children, user, onLogin, onLogout }: { children: React.ReactNode; user: User | null; onLogin: () => void; onLogout: () => void }) {
+function ShellLayout({ children, user, onLogin, onLogout, theme, onToggleTheme }: { children: React.ReactNode; user: User | null; onLogin: () => void; onLogout: () => void; theme: 'light' | 'dark'; onToggleTheme: () => void }) {
   const mark = <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path d="m8.2 6.4 4.2-4.2 10.1 10.1-4.2 4.2z" /><path d="m18.8 13.2-9.1 9.1" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" /><path d="M5.6 23.2h16v3.2h-16z" /></svg>;
-  return <><header className="topbar"><Link href="/" className="brand"><span className="brand-mark">{mark}</span><span>lance<span>arte</span></span></Link><nav className="main-nav"><Link href="/#auctions">Explorar lotes</Link>{user?.role === 'auctioneer' && <Link href="/console">Painel do leiloeiro</Link>}{user?.role === 'bidder' && <Link href="/wallet">Minha carteira</Link>}<Link href="/#how-it-works">Como participar</Link></nav><div className="account-area">{user ? <><span className="user-chip"><span className="avatar">{user.name.slice(0, 1)}</span><span>{user.name}<small>{user.role === 'auctioneer' ? 'Leiloeiro' : 'Licitante'}</small></span></span><button className="button button-quiet compact" onClick={onLogout}>Sair</button></> : <button className="button button-dark compact" onClick={onLogin}>Entrar</button>}</div></header><main>{children}</main><footer className="footer"><Link href="/" className="brand footer-brand"><span className="brand-mark">{mark}</span><span>lance<span>arte</span></span></Link><p>Arte encontra novos caminhos.</p><span>© 2026 LanceArte · Leilões de arte simulados</span></footer></>;
+  return <>
+    <div className="auction-ribbon"><span><i />PREGÃO DIGITAL</span><b>Arte em disputa, em tempo real</b><span className="ribbon-note">Lances e saldos demonstrativos</span></div>
+    <header className="topbar">
+      <Link href="/" className="brand"><span className="brand-mark">{mark}</span><span>lance<span>arte</span></span></Link>
+      <nav className="main-nav"><Link href="/#auctions">Todos os lotes</Link>{user?.role === 'auctioneer' && <Link href="/console">Painel do leiloeiro</Link>}{user?.role === 'bidder' && <Link href="/wallet">Minha carteira</Link>}<Link href="/#how-it-works">Como participar</Link></nav>
+      <div className="account-area">
+        <button className="theme-toggle" type="button" onClick={onToggleTheme} aria-label={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'} aria-pressed={theme === 'dark'} title={theme === 'dark' ? 'Ativar tema claro' : 'Ativar tema escuro'}><span aria-hidden="true">{theme === 'dark' ? '☼' : '☾'}</span><small>{theme === 'dark' ? 'Claro' : 'Escuro'}</small></button>
+        {user ? <><span className="user-chip"><span className="avatar">{user.name.slice(0, 1)}</span><span>{user.name}<small>{user.role === 'auctioneer' ? 'Leiloeiro' : 'Licitante'}</small></span></span><button className="button button-quiet compact" onClick={onLogout}>Sair</button></> : <button className="button button-dark compact" onClick={onLogin}>Entrar</button>}
+      </div>
+    </header>
+    <main>{children}</main>
+    <footer className="footer"><Link href="/" className="brand footer-brand"><span className="brand-mark">{mark}</span><span>lance<span>arte</span></span></Link><p>Arte encontra novos caminhos.</p><span>© 2026 LanceArte · Leilões de arte simulados</span></footer>
+  </>;
 }
 
 export function AppShell({ view, id }: { view: 'home' | 'console' | 'wallet' | 'lot' | 'audit' | 'receipt'; id?: string }) {
@@ -66,6 +78,7 @@ export function AppShell({ view, id }: { view: 'home' | 'console' | 'wallet' | '
   const [loginOpen, setLoginOpen] = useState(false);
   const [flash, setFlash] = useState<Flash>(null);
   const [refresh, setRefresh] = useState(0);
+  const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const notify = useCallback((kind: 'success' | 'error', text: string) => { setFlash({ kind, text }); window.setTimeout(() => setFlash(null), 4500); }, []);
   const authenticate = useCallback(async (mode: 'login' | 'register', credentials: { name?: string; email: string; password: string; role?: 'bidder' | 'auctioneer' }) => {
     const response = await apiFetch(`/auth/${mode}`, { method: 'POST', body: JSON.stringify(credentials) });
@@ -91,7 +104,18 @@ export function AppShell({ view, id }: { view: 'home' | 'console' | 'wallet' | '
     apiFetch('/auth/me').then(r => r.json()).then(session => setUser(session.user)).catch(() => {});
   }, [refresh]);
 
-  return <ShellLayout user={user} onLogin={() => setLoginOpen(true)} onLogout={logout}>
+  useEffect(() => {
+    const saved = window.localStorage.getItem('lancearte-theme');
+    setTheme(saved === 'dark' || saved === 'light' ? saved : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  }, []);
+  useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
+  const toggleTheme = () => setTheme(current => {
+    const next = current === 'dark' ? 'light' : 'dark';
+    window.localStorage.setItem('lancearte-theme', next);
+    return next;
+  });
+
+  return <ShellLayout user={user} onLogin={() => setLoginOpen(true)} onLogout={logout} theme={theme} onToggleTheme={toggleTheme}>
     {flash && <div className={`flash flash-${flash.kind}`} role="status">{flash.text}<button onClick={() => setFlash(null)} aria-label="Fechar">×</button></div>}
     {view === 'home' && <HomeView onLogin={() => setLoginOpen(true)} key={refresh} />}
     {view === 'lot' && id && <LotView id={id} user={user} onLogin={() => setLoginOpen(true)} notify={notify} key={`${id}-${refresh}`} />}
@@ -152,11 +176,22 @@ function HomeView({ onLogin }: { onLogin: () => void }) {
     return matchesStatus && searchableText.includes(search.trim().toLocaleLowerCase('pt-BR'));
   });
   const liveCount = lots.filter(lot => lot.status === 'live').length;
+  const featuredLot = lots.find(lot => lot.status === 'live');
   return <>
     <section className="marketplace-heading">
       <div className="marketplace-title"><div><span className="eyebrow">LANCEARTE · LEILÕES DE ARTE</span><h1>Obras em disputa</h1><p>Explore os lotes, acompanhe os lances e encontre sua próxima obra.</p></div><div className="marketplace-live"><i /><strong>{liveCount.toString().padStart(2, '0')}</strong><span>leilões<br />ao vivo</span></div></div>
       <label className="gallery-search"><span aria-hidden="true">⌕</span><input type="search" aria-label="Buscar obra ou artista" placeholder="Busque por obra ou artista" value={search} onChange={event => setSearch(event.target.value)} /><kbd>⌕</kbd></label>
     </section>
+    {featuredLot && <section className="featured-auction" aria-label="Lote ao vivo em destaque">
+      <div className="featured-art"><Artwork src={featuredLot.imageUrl} title={featuredLot.title} /></div>
+      <div className="featured-copy">
+        <div className="featured-kicker"><Status value={featuredLot.status} /><span>Lote ao vivo em destaque</span></div>
+        <h2>{featuredLot.title}</h2>
+        <p className="featured-artist">{featuredLot.artwork?.artist ?? featuredLot.artwork?.artist_title ?? 'Acervo LanceArte'}{(featuredLot.artwork?.date ?? featuredLot.artwork?.date_display) ? ` · ${featuredLot.artwork?.date ?? featuredLot.artwork?.date_display}` : ''}</p>
+        <div className="featured-facts"><div><span>Lance atual</span><strong>{brl(featuredLot.currentBid ?? featuredLot.openingBid)}</strong></div><div><span>Próximo lance</span><strong>{brl(featuredLot.currentBid === null ? featuredLot.openingBid : featuredLot.currentBid + featuredLot.increment)}</strong></div><div><span>Encerra</span><strong>{when(featuredLot.endsAt)}</strong></div></div>
+        <div className="featured-actions"><Link className="button button-dark" href={`/lots/${featuredLot.id}`}>Entrar na sala e licitar <span>↗</span></Link><Link className="featured-audit" href={`/audit/${featuredLot.id}`}>Consultar histórico público</Link></div>
+      </div>
+    </section>}
     <section className="auction-section" id="auctions"><div className="catalog-toolbar"><div className="catalog-categories" aria-label="Filtrar lotes">{[['all', 'Todos os lotes'], ['live', 'Ao vivo'], ['scheduled', 'Em breve'], ['closed', 'Encerrados']].map(([value, label]) => <button key={value} className={`filter-pill ${filter === value ? 'active' : ''}`} onClick={() => setFilter(value)}>{label}{value === 'live' && <span>{liveCount}</span>}</button>)}</div><span className="lot-count">{shown.length} {shown.length === 1 ? 'lote' : 'lotes'}</span></div>{loading ? <div className="empty-state"><span className="loader" />Carregando os lotes…</div> : error ? <div className="empty-state"><span className="empty-icon">⌁</span><b>Não foi possível carregar os leilões.</b><span>A conexão com a plataforma não respondeu. Verifique se a API está disponível e tente novamente.</span><button className="button button-outline" onClick={() => setLoadAttempt(value => value + 1)}>Tentar novamente ↻</button></div> : shown.length ? <div className="lot-grid">{shown.map(lot => <LotCard lot={lot} key={lot.id} />)}</div> : <div className="empty-state"><span className="empty-icon">◇</span><b>Nenhum lote por aqui ainda.</b><span>Os próximos leilões aparecem nesta galeria assim que forem publicados.</span><button className="button button-outline" onClick={onLogin}>Acessar o acervo</button></div>}</section>
     <section className="marketplace-assurances" id="how-it-works"><span><b>01</b> Depósitos simulados</span><span><b>02</b> Disputa em tempo real</span><span><b>03</b> Histórico público e verificável</span></section>
   </>;
