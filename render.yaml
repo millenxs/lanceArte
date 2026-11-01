@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: lancearte-api
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: WEB_ORIGIN
+        sync: false
+      - key: AIC_USER_AGENT
+        sync: false
