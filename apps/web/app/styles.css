@@ -782,9 +782,7 @@ button:disabled {
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 26px;
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 18px;
 }
 
 .catalog-title-group h1 {
@@ -810,7 +808,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 320px;
+  width: 340px;
   height: 44px;
   padding: 0 14px;
   border: 1px solid var(--border-strong);
@@ -842,26 +840,53 @@ button:disabled {
   padding: 0 4px;
 }
 
-.catalog-sort {
+.catalog-filter-pills {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 20px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.catalog-pill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 44px;
-  padding: 0 12px;
+  padding: 8px 16px;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: 99px;
   background: var(--surface);
-  font-size: 13px;
-  color: var(--muted);
+  color: var(--ink-secondary);
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: all 0.16s ease;
 }
 
-.catalog-sort select {
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--ink);
-  font-weight: 600;
-  cursor: pointer;
+.catalog-pill:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.catalog-pill.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #ffffff;
+}
+
+.catalog-pill b {
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: var(--surface-alt);
+  color: var(--ink-secondary);
+  font-size: 11.5px;
+}
+
+.catalog-pill.active b {
+  background: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
 }
 
 /* LOT CARDS GRID (Catawiki / LiveAuctioneers Card Style) */
@@ -1753,6 +1778,53 @@ button:disabled {
   color: var(--primary);
 }
 
+.live-stream-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.live-incoming-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--success-soft);
+  border: 1px solid rgba(27, 110, 68, 0.25);
+  color: var(--ink);
+  animation: incomingFade 0.45s ease;
+}
+
+.live-incoming-banner small {
+  font-size: 12.5px;
+  color: var(--ink-secondary);
+}
+
+.live-incoming-banner strong {
+  color: var(--success);
+}
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgba(27, 110, 68, 0.18);
+  flex-shrink: 0;
+}
+
+@keyframes incomingFade {
+  from {
+    opacity: 0.35;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .bid-list {
   display: flex;
   flex-direction: column;
@@ -1768,10 +1840,32 @@ button:disabled {
   padding: 11px 10px;
   border-bottom: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  transition: background-color 0.25s ease;
 }
 
 .bid-row-leader {
   background: var(--primary-soft);
+}
+
+.bid-row-highlight:not(.bid-row-leader) {
+  background: var(--surface-subtle);
+}
+
+.audit-tech-details {
+  margin-top: 8px;
+}
+
+.audit-tech-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  user-select: none;
+}
+
+.audit-tech-details[open] summary {
+  margin-bottom: 8px;
+  color: var(--primary);
 }
 
 .tiny-avatar {
