@@ -19,7 +19,7 @@ type DemoArtwork = {
 
 const artworks: DemoArtwork[] = [
   { key: 'van-gogh-bedroom', id: '28560', title: 'The Bedroom', artist: 'Vincent van Gogh', date: '1889', publicDomain: true, imageUrl: '/api/images/6644829f-f292-c5c4-a73c-0356a6fdbf0d', sourceUrl: 'https://www.artic.edu/artworks/28560', startOffsetHours: -1, durationHours: 2, openingCents: 70000, incrementCents: 5000 },
-  { key: 'dali-monsters', id: '151424', title: 'Inventions of the Monsters', artist: 'Salvador Dalí', date: '1937', publicDomain: false, imageUrl: '/api/images/be9551d4-860f-37a0-1408-086617f1824e', sourceUrl: 'https://www.artic.edu/artworks/151424', startOffsetHours: 24, durationHours: 48, openingCents: 90000, incrementCents: 10000 },
+  { key: 'dali-monsters', id: '151424', title: 'Inventions of the Monsters', artist: 'Salvador Dalí', date: '1937', publicDomain: false, imageUrl: '/api/images/be9551d4-860f-37a0-1408-086617f1824e', sourceUrl: 'https://www.artic.edu/artworks/151424', startOffsetHours: -1, durationHours: 24, openingCents: 90000, incrementCents: 10000 },
   { key: 'dali-venus', id: '185184', title: 'Venus de Milo with Drawers', artist: 'Salvador Dalí', date: '1936', publicDomain: false, imageUrl: '/api/images/678c7a7a-b8c7-2857-7b97-f3c3501b8b1c', sourceUrl: 'https://www.artic.edu/artworks/185184', startOffsetHours: -96, durationHours: 24, openingCents: 65000, incrementCents: 5000 },
   { key: 'portinari-cafe', id: 'portinari-16371', title: 'Café', artist: 'Candido Portinari', date: '1935', publicDomain: false, imageUrl: 'https://acervo-portinari.s3.sa-east-1.amazonaws.com/f5ca02363ab4193d5feccce408eb5220.jpeg', sourceUrl: 'https://www.portinari.org.br/acervo/obras/16371/cafe', startOffsetHours: 48, durationHours: 72, openingCents: 80000, incrementCents: 5000 },
   { key: 'magritte-pipe', id: 'lacma-78-7', title: 'A Traição das Imagens (Isto não é um cachimbo)', artist: 'René Magritte', date: '1929', publicDomain: false, imageUrl: 'https://collections-images.lacma.org/images/31931/31931-1-primary.webp', sourceUrl: 'https://collections.lacma.org/node/239578', startOffsetHours: -0.5, durationHours: 1.5, openingCents: 120000, incrementCents: 10000 },
@@ -46,9 +46,20 @@ try {
     const sellerId = users[0].id;
     for (const item of artworks) {
       const seedKey = `demo:${item.key}`;
-      const exists = await client.query("SELECT id FROM lots WHERE artwork->>'seedKey'=$1 LIMIT 1", [seedKey]);
+      const exists = await client.query("SELECT id, status FROM lots WHERE artwork->>'seedKey'=$1 LIMIT 1", [seedKey]);
       if (exists.rowCount) {
         await client.query("UPDATE lots SET image_url=$1, artwork=jsonb_set(jsonb_set(artwork, '{imageUrl}', COALESCE(to_jsonb($1::text), 'null'::jsonb), true), '{publicDomain}', to_jsonb($3::boolean), true) WHERE id=$2", [item.imageUrl, exists.rows[0].id, item.publicDomain]);
+        // Keep one no-bid demo lot available as a live auction after the original demo window expires.
+        // Do not move lots that have bids or have already started; their history and settlement stay intact.
+        if (item.key === 'dali-monsters' && exists.rows[0].status === 'scheduled') {
+          const hasBids = await client.query('SELECT 1 FROM bids WHERE lot_id=$1 LIMIT 1', [exists.rows[0].id]);
+          if (!hasBids.rowCount) {
+            const now = Date.now();
+            const startsAt = new Date(now + item.startOffsetHours * 60 * 60 * 1000);
+            const endsAt = new Date(now + (item.startOffsetHours + item.durationHours) * 60 * 60 * 1000);
+            await client.query("UPDATE lots SET starts_at=$1, ends_at=$2, status='live' WHERE id=$3", [startsAt, endsAt, exists.rows[0].id]);
+          }
+        }
         continue;
       }
       const now = Date.now();
