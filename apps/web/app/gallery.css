@@ -15,8 +15,12 @@
 }
 
 body { background: var(--paper); font-size: 15px; }
+.topbar { height: 72px; padding: 0 max(5vw, calc((100vw - 1280px) / 2)); gap: 38px; background: #fff; }
+.brand-mark { width: 34px; height: 34px; border-radius: 4px; transform: none; color: #ead9aa; }
+.brand-mark svg { display: block; width: 23px; height: 23px; fill: currentColor; }
+.main-nav { gap: 25px; }
+.main-nav a { font-weight: 600; }
 .eyebrow { font: 600 11px/1.4 'DM Sans', sans-serif; letter-spacing: .035em; }
-.brand-mark { border-radius: 50% 50% 50% 3px; background: var(--navy); color: #ead9aa; }
 .brand>span:last-child>span { color: var(--accent); }
 .button-lime { background: var(--lime); color: var(--ink); }
 .button-lime:hover { background: var(--lime-dark); }
@@ -37,10 +41,10 @@ body { background: var(--paper); font-size: 15px; }
 .hero-seal { background: #3b58bd; color: #fff; }
 .auction-section { background: #f2f4f2; }
 .section-heading h2, .manifesto h2 { color: var(--ink); }
-.lot-grid { gap: 22px; }
-.lot-card { border-color: #e0e5e1; border-radius: 5px 5px 2px 2px; box-shadow: 0 7px 20px rgba(28, 45, 52, .035); }
+.lot-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
+.lot-card { border-color: #e0e5e1; border-radius: 4px; box-shadow: 0 2px 8px rgba(28, 45, 52, .045); overflow: hidden; }
 .lot-card:hover { border-color: #c9d4cf; box-shadow: 0 13px 28px rgba(28, 45, 52, .08); }
-.lot-card .artwork { background: #e7e7df; }
+.lot-card .artwork { height: auto; aspect-ratio: 1.22; background: #e7e7df; }
 .status-live { color: #9d513f; background: #f8ebe5; }
 .status-live i { background: #b85f47; box-shadow: 0 0 0 3px rgba(184, 95, 71, .12); }
 .filter-pill.active { color: #fff; background: #345b67; }
@@ -56,14 +60,16 @@ body { background: var(--paper); font-size: 15px; }
 .gallery-search:focus-within { border-color: #7388d1; box-shadow: 0 0 0 3px rgba(59, 88, 189, .12); }
 
 .modal-backdrop { background: rgba(20, 37, 45, .68); backdrop-filter: blur(3px); }
-.login-modal { display: grid; grid-template-columns: .82fr 1fr; width: min(920px, 96vw); max-height: min(850px, 92dvh); padding: 0; overflow: hidden; box-shadow: 0 28px 90px rgba(3, 18, 25, .32); }
-.login-artwork { position: relative; min-height: 620px; overflow: hidden; background: #425862; }
+.login-modal { display: grid; grid-template-columns: .82fr 1fr; grid-template-rows: minmax(0, 1fr); width: min(920px, 96vw); height: min(780px, 90dvh); min-height: min(560px, 82dvh); max-height: 90dvh; padding: 0; overflow: hidden; box-shadow: 0 28px 90px rgba(3, 18, 25, .32); }
+.login-artwork { position: relative; grid-column: 1; grid-row: 1; height: 100%; min-height: 0; overflow: hidden; background: #425862; }
 .login-artwork:after { content: ''; position: absolute; inset: 35% 0 0; background: linear-gradient(transparent, rgba(19, 36, 42, .84)); pointer-events: none; }
 .login-artwork img { display: block; width: 100%; height: 100%; position: absolute; inset: 0; object-fit: cover; }
 .login-artwork>span, .login-artwork>small { position: absolute; left: 30px; z-index: 1; color: #fff; }
 .login-artwork>span { bottom: 55px; font: 600 10px 'DM Sans', sans-serif; letter-spacing: .12em; }
 .login-artwork>small { bottom: 29px; font-size: 11px; color: rgba(255,255,255,.78); }
-.login-content { padding: 42px 42px 30px; overflow: auto; }
+.login-content { grid-column: 2; grid-row: 1; height: 100%; min-height: 0; max-height: 100%; padding: 42px 42px 30px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.login-content::-webkit-scrollbar { width: 8px; }
+.login-content::-webkit-scrollbar-thumb { background: #c8d1d7; border: 2px solid #fff; border-radius: 8px; }
 .login-content h2 { margin: 9px 0 8px; font-size: 38px; line-height: 1.04; }
 .login-content>p { max-width: 370px; margin: 0 0 19px; color: #6c777c; font-size: 12px; line-height: 1.65; }
 .login-modal .eyebrow { color: #3b58bd; }
@@ -118,24 +124,100 @@ body { background: var(--paper); font-size: 15px; }
 .role-choice b { font-size: 12px; }
 .role-choice small { font-size: 11px; }
 
+/* Auction marketplace layout: discovery and bid data lead the page. */
+.marketplace-heading { padding: 28px max(5vw, calc((100vw - 1280px) / 2)) 22px; background: #fff; border-bottom: 1px solid var(--line); }
+.marketplace-title { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.marketplace-title .eyebrow { color: #657680; }
+.marketplace-title h1 { margin: 7px 0 4px; color: var(--ink); font: 700 clamp(30px, 3vw, 40px)/1.1 'Manrope', sans-serif; letter-spacing: -.045em; }
+.marketplace-title p { margin: 0; color: #65747b; font-size: 14px; }
+.marketplace-live { display: flex; align-items: center; gap: 10px; min-width: 144px; padding: 8px 0 8px 22px; border-left: 1px solid var(--line); color: #485a64; }
+.marketplace-live i { width: 9px; height: 9px; border-radius: 50%; background: #b14e48; box-shadow: 0 0 0 4px #f7e9e7; }
+.marketplace-live strong { color: var(--ink); font: 700 28px/1 'Manrope', sans-serif; }
+.marketplace-live span { font-size: 12px; line-height: 1.25; }
+.marketplace-heading .gallery-search { width: 100%; max-width: none; min-height: 52px; margin: 20px 0 0; border-radius: 3px; background: #f7f9fa; }
+.marketplace-heading .gallery-search input { font-size: 15px; }
+.marketplace-heading .gallery-search kbd { margin-left: auto; padding: 3px 7px; border: 1px solid #dfe5e9; border-radius: 3px; background: #fff; color: #7a8990; font: 12px 'DM Sans', sans-serif; }
+.auction-section { max-width: 1440px; margin: 0 auto; padding: 0 max(5vw, calc((100vw - 1280px) / 2)) 62px; background: var(--paper); }
+.catalog-toolbar { position: sticky; top: 72px; z-index: 12; display: flex; align-items: center; min-height: 62px; gap: 18px; margin-bottom: 20px; border-bottom: 1px solid var(--line); background: rgba(242, 245, 247, .96); backdrop-filter: blur(10px); }
+.catalog-categories { display: flex; align-items: stretch; align-self: stretch; gap: 22px; }
+.catalog-categories .filter-pill { display: inline-flex; align-items: center; gap: 8px; padding: 0 3px; border: 0; border-bottom: 2px solid transparent; color: #61717a; font-size: 13px; white-space: nowrap; }
+.catalog-categories .filter-pill.active { border-color: var(--accent); background: transparent; color: var(--ink); font-weight: 700; }
+.catalog-categories .filter-pill>span { min-width: 20px; padding: 2px 5px; border-radius: 10px; background: #f5e9e6; color: #a84b44; font-size: 11px; text-align: center; }
+.catalog-toolbar .lot-count { font: 12px 'DM Sans', sans-serif; }
+.lot-card { min-width: 0; }
+.lot-card-body { padding: 15px 15px 13px; }
+.lot-card-meta { gap: 8px; font: 10px 'DM Sans', sans-serif; }
+.lot-card-meta>span:last-child { text-align: right; }
+.lot-card h3 { display: -webkit-box; min-height: 42px; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 16px; line-height: 1.3; }
+.lot-card-body>p { min-height: 18px; margin-bottom: 13px; font-size: 12px; }
+.lot-card-price { align-items: flex-start; flex-direction: column; gap: 3px; padding-top: 11px; }
+.lot-card-price>span { font-size: 11px; }
+.lot-card-price .money { font-size: 19px; }
+.lot-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 12px; margin-top: 12px; border-top: 1px solid #eff0ec; }
+.lot-card-footer>span { color: #718087; font-size: 10px; }
+.lot-card-footer>b { color: #344fa9; font-size: 11px; white-space: nowrap; }
+.marketplace-assurances { display: flex; justify-content: center; gap: clamp(24px, 7vw, 110px); padding: 23px 5vw; border-top: 1px solid var(--line); background: #fff; color: #5e6e76; font-size: 12px; }
+.marketplace-assurances span { display: flex; align-items: center; gap: 8px; }
+.marketplace-assurances b { color: #344fa9; font-size: 11px; }
+
+@media (max-width: 1100px) {
+  .topbar { padding-right: 4%; padding-left: 4%; gap: 24px; }
+  .main-nav { gap: 17px; }
+  .lot-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
 @media (max-width: 760px) {
-  .login-modal { display: block; width: min(540px, 96vw); max-height: 92dvh; overflow-y: auto; }
-  .login-artwork { min-height: 155px; height: 155px; }
+  .topbar { height: 64px; padding: 0 18px; gap: 14px; }
+  .main-nav { display: none; }
+  .login-modal { display: grid; grid-template-columns: 1fr; grid-template-rows: 138px minmax(0, 1fr); width: min(540px, 96vw); height: min(820px, 92dvh); min-height: 0; max-height: 92dvh; overflow: hidden; }
+  .login-artwork { grid-column: 1; grid-row: 1; min-height: 0; height: 100%; }
   .login-artwork img { object-position: center 38%; }
   .login-artwork>span { left: 22px; bottom: 37px; font-size: 9px; }
   .login-artwork>small { left: 22px; bottom: 16px; font-size: 9px; }
-  .login-content { padding: 25px 24px 23px; overflow: visible; }
+  .login-content { grid-column: 1; grid-row: 2; height: 100%; max-height: 100%; min-height: 0; padding: 25px 24px 23px; overflow-y: auto; }
   .login-content h2 { font-size: 34px; }
-  .gallery-search { width: 100%; margin: 17px 0; }
+  .marketplace-heading { padding: 23px 20px 18px; }
+  .marketplace-title h1 { font-size: 30px; }
+  .marketplace-title p { max-width: 36ch; font-size: 12px; line-height: 1.5; }
+  .marketplace-live { min-width: 90px; gap: 7px; padding-left: 12px; }
+  .marketplace-live strong { font-size: 23px; }
+  .marketplace-live span { font-size: 10px; }
+  .auction-section { padding: 0 20px 42px; }
+  .catalog-toolbar { top: 64px; min-height: 55px; margin-bottom: 14px; }
+  .catalog-categories { gap: 16px; overflow-x: auto; }
+  .catalog-categories .filter-pill { font-size: 12px; }
+  .catalog-toolbar .lot-count { display: none; }
+  .lot-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .lot-card .artwork { aspect-ratio: 1.05; }
+  .lot-card-body { padding: 11px; }
+  .lot-card-meta { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .lot-card-meta>span:last-child { text-align: left; }
+  .lot-card h3 { min-height: 38px; margin: 10px 0 4px; font-size: 14px; }
+  .lot-card-body>p { min-height: 16px; margin-bottom: 9px; font-size: 11px; }
+  .lot-card-price .money { font-size: 16px; }
+  .lot-card-footer { align-items: flex-start; flex-direction: column; gap: 7px; }
+  .marketplace-assurances { align-items: flex-start; flex-direction: column; gap: 12px; padding: 20px; }
 }
 
 @media (max-width: 480px) {
   .test-access { grid-template-columns: 1fr; }
   .test-access>span { grid-column: auto; }
-  .login-artwork { min-height: 120px; height: 120px; }
+  .login-modal { grid-template-rows: 120px minmax(0, 1fr); }
+  .login-artwork { min-height: 0; height: 100%; }
   .login-artwork>span { bottom: 30px; }
   .login-artwork>small { bottom: 11px; }
   .login-content { padding: 21px 19px; }
+  .marketplace-title { align-items: flex-start; }
+  .marketplace-title h1 { font-size: 27px; }
+  .marketplace-title p { max-width: 30ch; }
+  .marketplace-live { min-width: auto; padding-left: 10px; }
+  .marketplace-live span { display: none; }
+  .marketplace-live strong { font-size: 20px; }
+  .catalog-categories { gap: 13px; }
+  .catalog-categories .filter-pill { font-size: 11px; }
+  .lot-card-body { padding: 9px; }
+  .lot-card h3 { font-size: 12px; }
+  .lot-card-footer>span { font-size: 9px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
