@@ -1,6 +1,6 @@
 # LanceArte
 
-Casa de leilões de obras de arte, criada para o teste técnico Elite Dev da Verzel. O projeto usa Next.js e TypeScript na interface, Fastify e Socket.IO na API, PostgreSQL para persistência e a API pública do Art Institute of Chicago como catálogo de obras.
+Casa de leilões de obras de arte, criada para o teste técnico Elite Dev da Verzel. O projeto usa Next.js e TypeScript na interface, Fastify e Socket.IO na API, PostgreSQL para persistência e catálogos do Art Institute of Chicago, Projeto Portinari e LACMA para descobrir obras.
 
 ## Funcionalidades
 
@@ -9,7 +9,8 @@ Casa de leilões de obras de arte, criada para o teste técnico Elite Dev da Ver
 - Sala de leilão com atualização em tempo real, lances pseudonimizados e prorrogação nos dois minutos finais.
 - Carteira de demonstração com depósitos, saldo disponível e comprometido, reserva e liquidação do lance vencedor.
 - Comprovante de arremate com link público e histórico público com verificação da cadeia SHA-256.
-- Três perfis de demonstração e lote inicial com lance aberto.
+- Cadastro e login por e-mail, senha armazenada com hash e escolha de papel no cadastro.
+- Credenciais de teste para experimentar o acervo como licitante ou leiloeiro.
 
 Todos os valores são simulados; não há pagamentos reais.
 
@@ -47,13 +48,15 @@ Para executar a pilha inteira em containers, use `docker compose up --build`. O 
 
 ## Perfis e dados de demonstração
 
-Na tela **Entrar**, escolha um dos perfis:
+Em **Acessar o acervo**, entre com uma conta existente ou crie um perfil. O cadastro pergunta se a pessoa quer dar lances (licitante) ou oferecer obras (leiloeiro).
 
-- **Helena Ribeiro** — leiloeira, publica e acompanha lotes.
-- **Marcos Lima** — licitante, com R$ 5.000,00 simulados e lance líder no lote inicial.
-- **Camila Souza** — licitante, com R$ 5.000,00 simulados para disputar o lote.
+| Papel | E-mail | Senha |
+| --- | --- | --- |
+| Licitante | `colecionador@lancearte.test` | `Galeria#2026` |
+| Leiloeira | `leiloeira@lancearte.test` | `Atelie#2026` |
+| Segundo licitante para simular disputa em outra janela | `segundo.licitante@lancearte.test` | `Segundo#2026` |
 
-O seed é idempotente para o lote de demonstração. Ele usa a obra “A Sunday on La Grande Jatte — 1884”, do Art Institute of Chicago.
+O seed cria ou atualiza essas credenciais e preserva os lotes de demonstração ao ser executado novamente. Use os e-mails `.test` somente na demonstração.
 
 ## Configuração
 
@@ -72,7 +75,8 @@ Em desenvolvimento, a interface usa `http://localhost:4000` diretamente. No Verc
 
 ## API
 
-- `GET /health`, `GET /auth/demo-users`, `GET /auth/me`, `POST /auth/demo-login`, `POST /auth/logout`
+- `GET /health`, `GET /auth/me`, `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`
+- `GET /images/:imageId` para servir imagens do IIIF do Art Institute com o cabeçalho de identificação esperado pela API externa
 - `GET /items?q=...`, `GET /lots`, `GET /lots/:id`, `GET /lots/:id/bids`
 - `POST /lots`, `POST /lots/:id/cancel`, `POST /lots/:id/bids`
 - `GET /wallet/me`, `POST /wallet/deposits`, `GET /wallet/wins`
@@ -90,7 +94,8 @@ Depois do primeiro deploy, confirme que `/health` da API responde e que a URL da
 
 ## Decisões e limites conhecidos
 
-- O serviço externo é consultado ao pesquisar e criar lotes. O retrato do item fica salvo localmente no lote; a vitrine e os lotes existentes não dependem de nova consulta ao museu.
+- Os catálogos externos são consultados ao pesquisar e criar lotes. O retrato do item fica salvo localmente; a vitrine e os lotes existentes não dependem de nova consulta aos museus.
+- Senhas são verificadas com scrypt e nunca armazenadas em texto puro. Sessões usam cookie `HttpOnly`.
 - A carteira, depósitos e liquidação servem apenas para demonstrar regras de negócio.
 - Os eventos de auditoria são append-only no PostgreSQL e formam uma cadeia SHA-256 por lote. A página pública recalcula essa cadeia e detecta divergências nos registros apresentados.
 - Cancelamento é permitido somente antes do primeiro lance. Busca e filtro de lotes e tema escuro podem ser ampliados depois dos fluxos exigidos.

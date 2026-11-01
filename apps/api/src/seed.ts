@@ -1,5 +1,6 @@
 import { pool, withTransaction } from './db.js';
 import { hashAuditEvent } from './domain.js';
+import { hashPassword } from './auth.js';
 
 type DemoArtwork = {
   key: string;
@@ -25,12 +26,19 @@ const artworks: DemoArtwork[] = [
   { key: 'magritte-time-transfixed', id: '34181', title: 'La durée poignardée (Time Transfixed)', artist: 'René Magritte', date: '1938', publicDomain: false, imageUrl: '/api/images/91e4c46b-9ef3-ca78-148c-86845e457d88', sourceUrl: 'https://www.artic.edu/artworks/34181', startOffsetHours: -120, durationHours: 24, openingCents: 55000, incrementCents: 5000 }
 ];
 
+const demoUsers = [
+  { name: 'Helena Ribeiro', role: 'auctioneer', email: 'leiloeira@lancearte.test', password: 'Atelie#2026' },
+  { name: 'Marcos Lima', role: 'bidder', email: 'colecionador@lancearte.test', password: 'Galeria#2026' },
+  { name: 'Camila Souza', role: 'bidder', email: 'segundo.licitante@lancearte.test', password: 'Segundo#2026' }
+] as const;
+
 try {
   await withTransaction(async client => {
     const users: { id: string }[] = [];
-    for (const [name, role] of [['Helena Ribeiro', 'auctioneer'], ['Marcos Lima', 'bidder'], ['Camila Souza', 'bidder']] as const) {
-      const found = await client.query('SELECT id FROM users WHERE name=$1 AND role=$2 ORDER BY created_at LIMIT 1', [name, role]);
-      const id = found.rows[0]?.id ?? (await client.query('INSERT INTO users(name, role) VALUES($1,$2) RETURNING id', [name, role])).rows[0].id;
+    for (const demo of demoUsers) {
+      const found = await client.query('SELECT id FROM users WHERE name=$1 AND role=$2 ORDER BY created_at LIMIT 1', [demo.name, demo.role]);
+      const id = found.rows[0]?.id ?? (await client.query('INSERT INTO users(name, role) VALUES($1,$2) RETURNING id', [demo.name, demo.role])).rows[0].id;
+      await client.query('UPDATE users SET email=$1,password_hash=$2 WHERE id=$3', [demo.email, hashPassword(demo.password), id]);
       users.push({ id });
       const wallet = await client.query('SELECT 1 FROM wallet_transactions WHERE user_id=$1 LIMIT 1', [id]);
       if (!wallet.rowCount) await client.query("INSERT INTO wallet_transactions(user_id, kind, available_delta_cents, committed_delta_cents, note) VALUES($1,'deposit',500000,0,'Saldo inicial de demonstração')", [id]);
@@ -62,7 +70,7 @@ try {
       }
     }
   });
-  console.log(`Catálogo de demonstração garantido: ${artworks.length} obras; lotes ao vivo, agendados e encerrados. Usuários: Helena Ribeiro (leiloeira), Marcos Lima e Camila Souza (licitantes).`);
+  console.log(`Catálogo de demonstração garantido: ${artworks.length} obras; lotes ao vivo, agendados e encerrados. Acessos de teste prontos para leiloeira e licitantes.`);
 } finally {
   await pool.end();
 }

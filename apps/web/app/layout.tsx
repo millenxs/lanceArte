@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './styles.css';
 import './detail-overrides.css';
+import './gallery.css';
 
 export const metadata: Metadata = {
   title: 'LanceArte — leilões de arte ao vivo',

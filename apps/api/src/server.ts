@@ -5,6 +5,7 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Server as SocketServer } from 'socket.io';
 import type { PoolClient } from 'pg';
 import { pool, withTransaction } from './db.js';
+import { hashPassword, verifyPassword } from './auth.js';
 import { auditMatchesCheckpoint, evaluateBid, hashAuditEvent, pseudonym } from './domain.js';
 
 const app = Fastify({ logger: true });
@@ -30,6 +31,9 @@ function sessionValue(id: string): string {
   const signature = createHmac('sha256', SESSION_SECRET).update(id).digest('hex');
   return `${id}.${signature}`;
 }
+function setSessionCookie(reply: any, id: string) {
+  reply.setCookie(COOKIE, sessionValue(id), { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 60 * 60 * 24 * 7 });
+}
 function userIdFromCookie(value?: string): string | null {
   if (!value) return null;
   const dot = value.lastIndexOf('.');
@@ -47,7 +51,7 @@ async function currentUser(request: FastifyRequest): Promise<User | null> {
 }
 async function requireUser(request: FastifyRequest, role?: User['role']): Promise<User> {
   const user = await currentUser(request);
-  if (!user) throw Object.assign(new Error('Entre com um usuário de demonstração para continuar.'), { statusCode: 401 });
+  if (!user) throw Object.assign(new Error('Entre ou crie um perfil para continuar.'), { statusCode: 401 });
   if (role && user.role !== role) throw Object.assign(new Error('Seu perfil não permite esta ação.'), { statusCode: 403 });
   return user;
 }
@@ -135,16 +139,34 @@ app.get<{ Params: { imageId: string } }>('/images/:imageId', async (request, rep
     return reply.code(502).send({ error: 'Imagem temporariamente indisponível.' });
   }
 });
-app.get('/auth/demo-users', async () => {
-  const result = await pool.query('SELECT id, name, role FROM users ORDER BY role DESC, name');
-  return result.rows;
-});
 app.get('/auth/me', async request => ({ user: await currentUser(request) }));
-app.post<{ Body: { userId?: string } }>('/auth/demo-login', async (request, reply) => {
-  const result = await pool.query('SELECT id, name, role FROM users WHERE id=$1', [request.body?.userId]);
-  if (!result.rowCount) return reply.code(400).send({ error: 'Escolha um usuário de demonstração válido.' });
-  reply.setCookie(COOKIE, sessionValue(result.rows[0].id), { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/', maxAge: 60 * 60 * 24 * 7 });
-  return { user: result.rows[0] };
+app.post<{ Body: { email?: string; password?: string } }>('/auth/login', async (request, reply) => {
+  const email = request.body?.email?.trim().toLowerCase();
+  const password = request.body?.password;
+  if (!email || !password) return reply.code(400).send({ error: 'Informe seu e-mail e sua senha.' });
+  const result = await pool.query('SELECT id, name, role, password_hash FROM users WHERE LOWER(email)=$1 LIMIT 1', [email]);
+  const candidate = result.rows[0];
+  if (!candidate || !verifyPassword(password, candidate.password_hash)) return reply.code(401).send({ error: 'E-mail ou senha não conferem.' });
+  setSessionCookie(reply, candidate.id);
+  return { user: { id: candidate.id, name: candidate.name, role: candidate.role } };
+});
+app.post<{ Body: { name?: string; email?: string; password?: string; role?: string } }>('/auth/register', async (request, reply) => {
+  const name = request.body?.name?.trim();
+  const email = request.body?.email?.trim().toLowerCase();
+  const password = request.body?.password;
+  const role = request.body?.role;
+  if (!name || name.length < 2 || name.length > 80) return reply.code(400).send({ error: 'Informe um nome entre 2 e 80 caracteres.' });
+  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return reply.code(400).send({ error: 'Informe um e-mail válido.' });
+  if (!password || password.length < 10 || password.length > 128) return reply.code(400).send({ error: 'A senha deve ter entre 10 e 128 caracteres.' });
+  if (role !== 'bidder' && role !== 'auctioneer') return reply.code(400).send({ error: 'Escolha como deseja participar do acervo.' });
+  try {
+    const result = await pool.query('INSERT INTO users(name, role, email, password_hash) VALUES($1,$2,$3,$4) RETURNING id,name,role', [name, role, email, hashPassword(password)]);
+    setSessionCookie(reply, result.rows[0].id);
+    return reply.code(201).send({ user: result.rows[0] });
+  } catch (error: any) {
+    if (error.code === '23505') return reply.code(409).send({ error: 'Este e-mail já tem um perfil. Entre com sua senha ou use outro e-mail.' });
+    throw error;
+  }
 });
 app.post('/auth/logout', async (_request, reply) => {
   reply.clearCookie(COOKIE, { path: '/', httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
