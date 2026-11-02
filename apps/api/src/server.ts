@@ -6,16 +6,22 @@ import { Server as SocketServer } from 'socket.io';
 import type { PoolClient } from 'pg';
 import { pool, withTransaction } from './db.js';
 import { hashPassword, verifyPassword } from './auth.js';
-import { auditMatchesCheckpoint, evaluateBid, hashAuditEvent, pseudonym } from './domain.js';
+import { auditMatchesCheckpoint, createRateLimiter, evaluateBid, hashAuditEvent, pseudonym } from './domain.js';
 
-const app = Fastify({ logger: true });
+const app = Fastify({ logger: true, trustProxy: true });
 const httpServer = app.server;
 const socket = new SocketServer(httpServer, {
   cors: { origin: process.env.WEB_ORIGIN?.split(',') ?? ['http://localhost:3000'], credentials: true }
 });
 const PORT = Number(process.env.PORT ?? process.env.API_PORT ?? 4000);
-const SESSION_SECRET = process.env.SESSION_SECRET ?? 'local-only-change-me-before-deploy';
+const rawSessionSecret = process.env.SESSION_SECRET?.trim();
+if (!rawSessionSecret || rawSessionSecret.length < 16) {
+  throw new Error('A variável de ambiente SESSION_SECRET deve ser configurada com pelo menos 16 caracteres.');
+}
+const SESSION_SECRET: string = rawSessionSecret;
 const COOKIE = 'lancearte_session';
+const loginRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, maxAttempts: 10 });
+const registerRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, maxAttempts: 6 });
 const money = (cents: string | number | bigint) => Number(cents) / 100;
 const centsFromMoney = (value: unknown): number => {
   const parsed = Number(value);
@@ -25,6 +31,19 @@ const centsFromMoney = (value: unknown): number => {
 
 await app.register(cors, { origin: process.env.WEB_ORIGIN?.split(',') ?? ['http://localhost:3000'], credentials: true });
 await app.register(cookie);
+
+app.addHook('onSend', async (_request, reply, payload) => {
+  reply.header('X-Content-Type-Options', 'nosniff');
+  reply.header('X-Frame-Options', 'DENY');
+  reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  reply.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  reply.header('Cross-Origin-Opener-Policy', 'same-origin');
+  reply.header('Content-Security-Policy', "default-src 'none'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'");
+  if (process.env.NODE_ENV === 'production') {
+    reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  return payload;
+});
 
 type User = { id: string; name: string; role: 'auctioneer' | 'bidder' };
 function sessionValue(id: string): string {
@@ -146,14 +165,27 @@ app.get('/auth/me', async request => ({ user: await currentUser(request) }));
 app.post<{ Body: { email?: string; password?: string } }>('/auth/login', async (request, reply) => {
   const email = request.body?.email?.trim().toLowerCase();
   const password = request.body?.password;
+  const ipKey = `login-ip:${request.ip}`;
+  const accountKey = `login-acct:${request.ip}:${email ?? 'anonymous'}`;
+  const ipLimit = loginRateLimiter.consume(ipKey);
+  const accountLimit = loginRateLimiter.consume(accountKey);
+  if (!ipLimit.allowed || !accountLimit.allowed) {
+    const retryAfter = Math.max(ipLimit.retryAfterSeconds, accountLimit.retryAfterSeconds);
+    return reply.header('Retry-After', String(retryAfter)).code(429).send({ error: 'Muitas tentativas de login em sequência. Aguarde alguns minutos e tente novamente.' });
+  }
   if (!email || !password) return reply.code(400).send({ error: 'Informe seu e-mail e sua senha.' });
   const result = await pool.query('SELECT id, name, role, password_hash FROM users WHERE LOWER(email)=$1 LIMIT 1', [email]);
   const candidate = result.rows[0];
   if (!candidate || !verifyPassword(password, candidate.password_hash)) return reply.code(401).send({ error: 'E-mail ou senha não conferem.' });
+  loginRateLimiter.reset(accountKey);
   setSessionCookie(reply, candidate.id);
   return { user: { id: candidate.id, name: candidate.name, role: candidate.role } };
 });
 app.post<{ Body: { name?: string; email?: string; password?: string; role?: string } }>('/auth/register', async (request, reply) => {
+  const registerLimit = registerRateLimiter.consume(`register-ip:${request.ip}`);
+  if (!registerLimit.allowed) {
+    return reply.header('Retry-After', String(registerLimit.retryAfterSeconds)).code(429).send({ error: 'Muitas tentativas de cadastro em sequência. Aguarde alguns minutos e tente novamente.' });
+  }
   const name = request.body?.name?.trim();
   const email = request.body?.email?.trim().toLowerCase();
   const password = request.body?.password;

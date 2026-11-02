@@ -56,3 +56,30 @@ export function auditMatchesCheckpoint(events: Array<{ previousHash: string; eve
 export function pseudonym(userId: string): string {
   return `Licitante ${createHash('sha256').update(userId).digest('hex').slice(0, 5).toUpperCase()}`;
 }
+
+export function createRateLimiter(options: { windowMs: number; maxAttempts: number }) {
+  const buckets = new Map<string, { count: number; resetAt: number }>();
+  return {
+    consume(key: string, nowMs = Date.now()): { allowed: boolean; retryAfterSeconds: number } {
+      for (const [entryKey, entry] of buckets) {
+        if (entry.resetAt <= nowMs) buckets.delete(entryKey);
+      }
+      const current = buckets.get(key);
+      if (!current || current.resetAt <= nowMs) {
+        buckets.set(key, { count: 1, resetAt: nowMs + options.windowMs });
+        return { allowed: true, retryAfterSeconds: 0 };
+      }
+      if (current.count >= options.maxAttempts) {
+        return {
+          allowed: false,
+          retryAfterSeconds: Math.max(1, Math.ceil((current.resetAt - nowMs) / 1000))
+        };
+      }
+      current.count += 1;
+      return { allowed: true, retryAfterSeconds: 0 };
+    },
+    reset(key: string) {
+      buckets.delete(key);
+    }
+  };
+}

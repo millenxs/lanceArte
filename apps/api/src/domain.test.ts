@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { auditIsValid, auditMatchesCheckpoint, evaluateBid, hashAuditEvent } from './domain.js';
+import { auditIsValid, auditMatchesCheckpoint, createRateLimiter, evaluateBid, hashAuditEvent } from './domain.js';
 
 const base = {
   status: 'live', startsAt: new Date('2026-01-01T10:00:00Z'), endsAt: new Date('2026-01-01T11:00:00Z'),
@@ -41,4 +41,18 @@ test('audit chain detects modified, removed, or inserted events', () => {
   assert.equal(auditMatchesCheckpoint(fullChain, 2, secondHash), true);
   assert.equal(auditMatchesCheckpoint(fullChain.slice(1), 2, secondHash), false);
   assert.equal(auditMatchesCheckpoint([...fullChain, { previousHash: secondHash, eventHash: 'inserted', payload: { type: 'inserted' } }], 2, secondHash), false);
+});
+
+test('rate limiter blocks excessive auth attempts and resets after window or explicit reset', () => {
+  const limiter = createRateLimiter({ windowMs: 60_000, maxAttempts: 3 });
+  const t0 = 1_000_000;
+  assert.equal(limiter.consume('ip:1', t0).allowed, true);
+  assert.equal(limiter.consume('ip:1', t0 + 100).allowed, true);
+  assert.equal(limiter.consume('ip:1', t0 + 200).allowed, true);
+  const blocked = limiter.consume('ip:1', t0 + 300);
+  assert.equal(blocked.allowed, false);
+  assert.equal(blocked.retryAfterSeconds, 60);
+  assert.equal(limiter.consume('ip:1', t0 + 60_001).allowed, true);
+  limiter.reset('ip:1');
+  assert.equal(limiter.consume('ip:1', t0 + 60_002).allowed, true);
 });
