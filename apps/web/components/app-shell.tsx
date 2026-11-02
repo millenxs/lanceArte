@@ -40,7 +40,6 @@ type Bid = {
   bidder: string;
   amount: number;
   createdAt: string;
-  simulated?: boolean;
 };
 
 type Item = {
@@ -128,116 +127,6 @@ function formatRemaining(targetIso: string, nowMs: number): {
 function toLocalInputValue(date: Date): string {
   const offsetMs = date.getTimezoneOffset() * 60 * 1000;
   return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
-}
-
-/**
- * Generates deterministic fallback bids so closed lots and live lots
- * always display an engaging bid history (winner on closed lots, live stream on active lots).
- */
-function buildFallbackBids(lot: Lot): Bid[] {
-  const code = lot.id.replace(/[^a-f0-9]/gi, '').toUpperCase();
-  const p1 = `Licitante ${(code.slice(0, 5) || '8A4F1').toUpperCase()}`;
-  const p2 = `Licitante ${(code.slice(5, 10) || '3C9E2').toUpperCase()}`;
-  const p3 = `Licitante ${(code.slice(10, 15) || '7D2B6').toUpperCase()}`;
-  const p4 = `Licitante ${(code.slice(15, 20) || '5F1A9').toUpperCase()}`;
-
-  const inc = lot.increment || 50;
-  const open = lot.openingBid || 500;
-
-  if (lot.status === 'closed') {
-    const finalAmount = lot.currentBid ?? open + inc * 3;
-    const endMs = new Date(lot.endsAt).getTime();
-    return [
-      {
-        bidder: lot.leader ?? p1,
-        amount: finalAmount,
-        createdAt: new Date(endMs - 2 * 60 * 1000).toISOString(),
-        simulated: true
-      },
-      {
-        bidder: p2,
-        amount: Math.max(open, finalAmount - inc),
-        createdAt: new Date(endMs - 9 * 60 * 1000).toISOString(),
-        simulated: true
-      },
-      {
-        bidder: p3,
-        amount: Math.max(open, finalAmount - inc * 2),
-        createdAt: new Date(endMs - 21 * 60 * 1000).toISOString(),
-        simulated: true
-      },
-      {
-        bidder: p4,
-        amount: open,
-        createdAt: new Date(endMs - 38 * 60 * 1000).toISOString(),
-        simulated: true
-      }
-    ];
-  }
-
-  // For live lots without enough bids yet, build a stream of recent bids
-  const topAmount = lot.currentBid ?? open;
-  const now = Date.now();
-  const step1 = Math.max(inc, Math.round(open - inc * 3));
-  const step2 = Math.max(inc, Math.round(open - inc * 2));
-  const step3 = Math.max(inc, Math.round(open - inc));
-
-  return [
-    {
-      bidder: lot.leader ?? p1,
-      amount: topAmount,
-      createdAt: new Date(now - 45 * 1000).toISOString(),
-      simulated: true
-    },
-    {
-      bidder: p2,
-      amount: lot.currentBid ? Math.max(open, topAmount - inc) : step3,
-      createdAt: new Date(now - 2 * 60 * 1000).toISOString(),
-      simulated: true
-    },
-    {
-      bidder: p3,
-      amount: lot.currentBid ? Math.max(open, topAmount - inc * 2) : step2,
-      createdAt: new Date(now - 5 * 60 * 1000).toISOString(),
-      simulated: true
-    },
-    {
-      bidder: p4,
-      amount: lot.currentBid ? Math.max(open, topAmount - inc * 3) : step1,
-      createdAt: new Date(now - 9 * 60 * 1000).toISOString(),
-      simulated: true
-    },
-    {
-      bidder: p1,
-      amount: Math.max(inc, step1 - inc),
-      createdAt: new Date(now - 14 * 60 * 1000).toISOString(),
-      simulated: true
-    }
-  ];
-}
-
-function effectiveLotDisplay(lot: Lot) {
-  const code = lot.id.replace(/[^a-f0-9]/gi, '').toUpperCase();
-  const fallbackWinner = `Licitante ${(code.slice(0, 5) || '8A4F1').toUpperCase()}`;
-  if (lot.status === 'closed' && lot.currentBid === null) {
-    return {
-      price: lot.openingBid + lot.increment * 3,
-      leader: fallbackWinner,
-      bidCount: Math.max(lot.bidCount ?? 0, 4)
-    };
-  }
-  if (lot.status === 'live' && (lot.bidCount ?? 0) === 0) {
-    return {
-      price: lot.currentBid ?? lot.openingBid,
-      leader: lot.leader ?? fallbackWinner,
-      bidCount: 5
-    };
-  }
-  return {
-    price: lot.currentBid ?? lot.openingBid,
-    leader: lot.leader,
-    bidCount: lot.bidCount ?? 0
-  };
 }
 
 function Status({ value }: { value: string }) {
@@ -342,7 +231,7 @@ function LotCard({ lot, nowMs }: { lot: Lot; nowMs: number }) {
       : lot.status === 'scheduled'
         ? formatRemaining(lot.startsAt, nowMs)
         : null;
-  const display = effectiveLotDisplay(lot);
+  const bidCount = lot.bidCount ?? 0;
 
   return (
     <Link className={`lot-card lot-card-${lot.status}`} href={`/lots/${lot.id}`}>
@@ -376,18 +265,26 @@ function LotCard({ lot, nowMs }: { lot: Lot; nowMs: number }) {
           <div className="lot-card-price-main">
             <span>
               {lot.status === 'live'
-                ? 'Lance atual'
+                ? lot.currentBid !== null
+                  ? 'Lance atual'
+                  : 'Lance inicial'
                 : lot.status === 'closed'
-                  ? 'Arrematado por'
+                  ? lot.currentBid === null
+                    ? 'Sem arremate'
+                    : 'Arrematado por'
                   : 'Lance inicial'}
             </span>
-            <Money>{brl(display.price)}</Money>
+            <Money muted={lot.status === 'closed' && lot.currentBid === null}>
+              {lot.currentBid === null && lot.status === 'closed'
+                ? '—'
+                : brl(lot.currentBid ?? lot.openingBid)}
+            </Money>
           </div>
           <div className="lot-card-bid-meta">
             <span className="bid-count-pill">
-              {display.bidCount === 0
-                ? 'Abertura'
-                : `${display.bidCount} ${display.bidCount === 1 ? 'lance' : 'lances'}`}
+              {bidCount === 0
+                ? 'Sem lances'
+                : `${bidCount} ${bidCount === 1 ? 'lance' : 'lances'}`}
             </span>
             <small>Inc. {brl(lot.increment)}</small>
           </div>
@@ -395,8 +292,8 @@ function LotCard({ lot, nowMs }: { lot: Lot; nowMs: number }) {
 
         <div className="lot-card-footer">
           <span className="lot-card-submeta">
-            {display.leader
-              ? `${lot.status === 'closed' ? 'Vencedor' : 'Líder'}: ${display.leader}`
+            {lot.leader
+              ? `${lot.status === 'closed' ? 'Vencedor' : 'Líder'}: ${lot.leader}`
               : `Leiloeiro: ${lot.sellerName || 'Acervo'}`}
           </span>
           <b className="lot-card-cta">
@@ -1058,8 +955,6 @@ function HomeView({ user, onLogin }: { user: User | null; onLogin: () => void })
     );
   }, [activeLots]);
 
-  const featuredDisplay = featuredLot ? effectiveLotDisplay(featuredLot) : null;
-
   const featuredRemaining = featuredLot
     ? featuredLot.status === 'live'
       ? formatRemaining(featuredLot.endsAt, nowMs)
@@ -1103,7 +998,7 @@ function HomeView({ user, onLogin }: { user: User | null; onLogin: () => void })
       </nav>
 
       <div className="home-container">
-        {featuredLot && featuredDisplay && (
+        {featuredLot && (
           <section
             className="featured-auction"
             id="featured-auction"
@@ -1150,15 +1045,23 @@ function HomeView({ user, onLogin }: { user: User | null; onLogin: () => void })
                 <div className="featured-price-col">
                   <span>
                     {featuredLot.status === 'live'
-                      ? 'LANCE ATUAL'
+                      ? featuredLot.currentBid !== null
+                        ? 'LANCE ATUAL'
+                        : 'LANCE INICIAL'
                       : featuredLot.status === 'closed'
-                        ? 'ARREMATADO POR'
+                        ? featuredLot.currentBid === null
+                          ? 'SEM ARREMATE'
+                          : 'ARREMATADO POR'
                         : 'LANCE INICIAL'}
                   </span>
-                  <strong>{brl(featuredDisplay.price)}</strong>
+                  <strong>
+                    {featuredLot.currentBid === null && featuredLot.status === 'closed'
+                      ? '—'
+                      : brl(featuredLot.currentBid ?? featuredLot.openingBid)}
+                  </strong>
                   <small>
-                    {featuredDisplay.leader
-                      ? `${featuredLot.status === 'closed' ? 'Vencedor' : 'Na liderança'}: ${featuredDisplay.leader}`
+                    {featuredLot.leader
+                      ? `${featuredLot.status === 'closed' ? 'Vencedor' : 'Na liderança'}: ${featuredLot.leader}`
                       : `Lance mínimo inicial: ${brl(featuredLot.openingBid)}`}
                   </small>
                 </div>
@@ -1175,9 +1078,9 @@ function HomeView({ user, onLogin }: { user: User | null; onLogin: () => void })
                     {featuredRemaining ? featuredRemaining.text : when(featuredLot.endsAt)}
                   </strong>
                   <small>
-                    {featuredDisplay.bidCount}{' '}
-                    {featuredDisplay.bidCount === 1 ? 'lance registrado' : 'lances registrados'} ·
-                    Inc. {brl(featuredLot.increment)}
+                    {featuredLot.bidCount ?? 0}{' '}
+                    {(featuredLot.bidCount ?? 0) === 1 ? 'lance registrado' : 'lances registrados'}{' '}
+                    · Inc. {brl(featuredLot.increment)}
                   </small>
                 </div>
               </div>
@@ -1459,27 +1362,6 @@ function LotView({
 
   const minimum = lot ? (lot.currentBid ?? lot.openingBid - lot.increment) + lot.increment : 0;
 
-  const displayedBids = useMemo(() => {
-    if (!lot) return [];
-    if (bids.length > 0) return bids;
-    if (lot.status === 'closed' || lot.status === 'live') {
-      return buildFallbackBids(lot);
-    }
-    return [];
-  }, [lot, bids]);
-
-  const displayInfo = useMemo(() => {
-    if (!lot) return { price: 0, leader: null as string | null, bidCount: 0 };
-    if (bids.length > 0) {
-      return {
-        price: lot.currentBid ?? bids[0].amount,
-        leader: lot.leader ?? bids[0].bidder,
-        bidCount: bids.length
-      };
-    }
-    return effectiveLotDisplay(lot);
-  }, [lot, bids]);
-
   const submitBidAmount = async (bidValue: number) => {
     if (!user) return onLogin();
     if (user.role === 'auctioneer') {
@@ -1662,31 +1544,38 @@ function LotView({
               <div className="pricebox-main">
                 <span>
                   {lot.status === 'live'
-                    ? 'LANCE ATUAL'
+                    ? lot.currentBid !== null
+                      ? 'LANCE ATUAL'
+                      : 'LANCE INICIAL'
                     : lot.status === 'closed'
-                      ? 'ARREMATADO POR'
+                      ? lot.currentBid === null
+                        ? 'ENCERRADO SEM LANCES'
+                        : 'ARREMATADO POR'
                       : 'LANCE INICIAL'}
                 </span>
-                <strong>{brl(displayInfo.price)}</strong>
+                <strong>
+                  {lot.status === 'closed' && lot.currentBid === null
+                    ? '—'
+                    : brl(lot.currentBid ?? lot.openingBid)}
+                </strong>
                 <small>
                   Lance inicial: {brl(lot.openingBid)} · Incremento mínimo: {brl(lot.increment)}
                 </small>
               </div>
 
               <div className="leader-tag">
-                {displayInfo.leader ? (
+                {lot.leader ? (
                   <>
                     <span>{lot.status === 'closed' ? 'VENCEDOR DO LOTE' : 'NA LIDERANÇA'}</span>
-                    <b className="leader-badge">{displayInfo.leader}</b>
+                    <b className="leader-badge">{lot.leader}</b>
                     <small>
-                      {displayInfo.bidCount}{' '}
-                      {displayInfo.bidCount === 1 ? 'lance registrado' : 'lances registrados'}
+                      {bids.length} {bids.length === 1 ? 'lance registrado' : 'lances registrados'}
                     </small>
                   </>
                 ) : (
                   <>
                     <span>DISPUTA</span>
-                    <b>Abertura em breve</b>
+                    <b>{lot.status === 'closed' ? 'Sem arremate' : 'Aguardando 1º lance'}</b>
                     <small>Mínimo {brl(lot.openingBid)}</small>
                   </>
                 )}
@@ -1863,10 +1752,11 @@ function LotView({
               </div>
             ) : (
               <div className="notice-box closed-notice">
-                <b>✓ Pregão encerrado · Lote arrematado</b>
+                <b>✓ Pregão encerrado</b>
                 <p>
-                  Obra arrematada por <b>{displayInfo.leader}</b> pelo lance vencedor de{' '}
-                  <b>{brl(displayInfo.price)}</b>.
+                  {lot.leader && lot.currentBid !== null
+                    ? `Obra arrematada por ${lot.leader} pelo lance vencedor de ${brl(lot.currentBid)}.`
+                    : 'Este pregão foi encerrado no horário previsto sem receber lances.'}
                 </p>
                 <div className="closed-notice-actions">
                   {lot.receiptToken && (
@@ -1892,24 +1782,24 @@ function LotView({
                   <span className="live-feed-pill">
                     <i />
                     {lot.status === 'live'
-                      ? `Lances em tempo real (${displayedBids.length})`
-                      : `${displayedBids.length} lances registrados`}
+                      ? `Tempo real (${bids.length})`
+                      : `${bids.length} ${bids.length === 1 ? 'lance registrado' : 'lances registrados'}`}
                   </span>
                 </div>
                 <Link href={`/audit/${lot.id}`}>Auditar histórico →</Link>
               </div>
 
-              {lot.status === 'live' ? (
-                <LiveBidStream bids={displayedBids} />
-              ) : displayedBids.length ? (
+              {lot.status === 'live' && bids.length > 0 ? (
+                <LiveBidStream bids={bids} />
+              ) : bids.length > 0 ? (
                 <div className="bid-list">
-                  {displayedBids.slice(0, 12).map((bid, index) => (
+                  {bids.slice(0, 12).map((bid, index) => (
                     <div
                       className={`bid-row ${index === 0 ? 'bid-row-leader' : ''}`}
                       key={`${bid.createdAt}-${index}`}
                     >
                       <span className="avatar tiny-avatar">
-                        {index === 0 ? '★' : `#${displayedBids.length - index}`}
+                        {index === 0 ? '★' : `#${bids.length - index}`}
                       </span>
                       <div className="bid-row-info">
                         <b>
@@ -1928,8 +1818,14 @@ function LotView({
                 </div>
               ) : (
                 <div className="history-empty">
-                  <span>⏳</span>
-                  <p>Os lances começarão assim que este pregão agendado for aberto.</p>
+                  <span>◇</span>
+                  <p>
+                    {lot.status === 'closed'
+                      ? 'Este lote foi encerrado sem lances registrados.'
+                      : lot.status === 'scheduled'
+                        ? 'Os lances começarão assim que este pregão agendado for aberto.'
+                        : 'Aguardando o primeiro lance neste pregão ao vivo.'}
+                  </p>
                 </div>
               )}
             </div>
@@ -2301,7 +2197,6 @@ function ConsoleView({
                 const canCancel =
                   (lot.status === 'scheduled' || lot.status === 'live') &&
                   (lot.bidCount ?? 0) === 0;
-                const display = effectiveLotDisplay(lot);
                 return (
                   <div className="managed-lot" key={lot.id}>
                     <Artwork src={lot.imageUrl} title={lot.title} />
@@ -2312,12 +2207,10 @@ function ConsoleView({
                       </div>
                       <b>{lot.title}</b>
                       <span>
-                        {lot.status === 'closed'
-                          ? `Arrematado: ${brl(display.price)}`
-                          : lot.currentBid !== null
-                            ? `Atual: ${brl(lot.currentBid)}`
-                            : `Inicial: ${brl(lot.openingBid)}`}{' '}
-                        · {lot.bidCount ?? 0} {(lot.bidCount ?? 0) === 1 ? 'lance real' : 'lances reais'}
+                        {lot.currentBid !== null
+                          ? `Atual: ${brl(lot.currentBid)}`
+                          : `Inicial: ${brl(lot.openingBid)}`}{' '}
+                        · {lot.bidCount ?? 0} {(lot.bidCount ?? 0) === 1 ? 'lance' : 'lances'}
                       </span>
                       <small className="managed-dates">
                         {when(lot.startsAt)} até {when(lot.endsAt)}
