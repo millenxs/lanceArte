@@ -1,0 +1,29 @@
+{
+  "version": "1.0",
+  "_comment": "服务结构定义：URL 值配置在 env（config/env.shared 公有默认 / local/.env 私有覆盖），通过 baseUrlEnv 环境变量读取；local/services.local.json 用于按 id 私有覆盖服务结构（如 dir/startCmd/readySignal），未列出的服务保持本文件的定义。",
+  "services": [
+    {
+      "id": "web",
+      "baseUrlEnv": "QA_WEB_BASE_URL",
+      "required": true,
+      "scope": [
+        "e2e"
+      ],
+      "dir": "",
+      "startCmd": "",
+      "readySignal": ""
+    },
+    {
+      "id": "api",
+      "baseUrlEnv": "QA_API_BASE_URL",
+      "required": false,
+      "scope": [
+        "api",
+        "integration"
+      ],
+      "dir": "",
+      "startCmd": "",
+      "readySignal": ""
+    }
+  ]
+}

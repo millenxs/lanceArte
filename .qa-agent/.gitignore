@@ -1,0 +1,17 @@
+# QA Agent runtime artifacts
+/current/
+/runs/
+/tmp/
+/local/
+/*.json
+/*.html
+
+# Long-lived QA Agent knowledge (team-shared, git-tracked)
+!/config/
+!/cases/
+!/profiles/
+!/risk-rules/
+!/fixtures/
+!/knowledge/
+!/reports/
+!/.gitignore

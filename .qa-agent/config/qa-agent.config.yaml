@@ -1,0 +1,46 @@
+version: "1.0"
+baseBranch: "main"
+pythonEncoding: "utf-8"
+branch:
+  pattern: "feature/ming-qa-{slug}"
+llm:
+  baseUrlEnv: "QA_AGENT_LLM_BASE_URL"
+  apiKeyEnv: "QA_AGENT_LLM_API_KEY"
+  # 留空则不启用多模型交叉审查；填你自己的 OpenAI 兼容网关地址后生效
+  defaultBaseUrl: ""
+  models:
+    - "gpt-5.4"
+    - "claude-sonnet-5"
+    - "deepseek-v4-pro"
+  # 单模型请求超时（秒）
+  timeoutSeconds: 300
+  # 默认走流式（SSE）。流式是超集，且多数网关默认或只支持流式；
+  # 端点确实不支持时自动降级重试一次非流式，通常不需要改这里。
+  stream: true
+qualityGates:
+  maxRepairLoops: 5
+  coverage:
+    lines: 80
+    branches: 70
+    functions: 80
+    newCode: 90
+commands:
+  unit: []
+  api: []
+  integration: []
+  e2e: []
+  review: []
+database:
+  mysqlMcp:
+    serverName: "mysql_mcp"
+    source: ".mcp.json"
+    requiredFor:
+      - "integration"
+      - "e2e"
+reports:
+  outputDir: ".qa-agent/reports"
+  keepHistory: true
+notify:
+  # 报告质量告警的 webhook 地址，留空则不发送任何通知（默认留空，不发数据）。
+  # 兼容 Slack / 飞书 / 钉钉 / 企业微信群机器人，使用通用 markdown POST。
+  webhook: ""

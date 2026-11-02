@@ -1,0 +1,363 @@
+{
+  "version": "1.0",
+  "metadata": {
+    "project": "LanceArte",
+    "requirement": "持久化出价与成交结果回归验收",
+    "baseBranch": "main",
+    "generatedAt": "2026-11-02T00:19:32.130427Z",
+    "sourceRefs": [
+      "d4d915c",
+      "Teste tecnico Elite Dev - Verzel (1).pdf, páginas 2-4",
+      "https://lancearte.vercel.app"
+    ],
+    "existingCaseReuse": {
+      "generatedAt": "2026-11-02T08:19:32+08:00",
+      "existingSummary": {
+        "caseFiles": 0,
+        "cases": 0,
+        "specTaskFiles": 0,
+        "specTasks": 0,
+        "testFiles": 0
+      },
+      "reused": 0,
+      "added": 4
+    },
+    "promotedAt": "2026-11-02T08:20:28+08:00",
+    "promotedFrom": "C:\\Projetos\\LanceArte\\.qa-agent\\current\\test-cases.json",
+    "artifactClass": "tracked-business-cases"
+  },
+  "assumptions": [
+    "生产环境测试仅读取公开页面和接口，不提交出价、存款或取消请求。",
+    "在线但无出价的状态通过浏览器网络模拟验证，不在生产数据库创建数据。"
+  ],
+  "openQuestions": [
+    "公开界面不提供钱包流水查询，本轮不能独立核对数据库中的买方扣款和拍卖师入账。"
+  ],
+  "environmentChecks": [
+    {
+      "id": "ENV-QA-001",
+      "name": "Playwright runtime",
+      "status": "passed",
+      "detail": "@playwright/test instalado; navegadores Chromium disponíveis.",
+      "requiredFor": [
+        "e2e"
+      ]
+    },
+    {
+      "id": "ENV-QA-002",
+      "name": "Acesso público sem credenciais",
+      "status": "passed",
+      "detail": "Escopo usa somente vitrine, sala, comprovante e auditoria públicos; checagens de credenciais foram dispensadas.",
+      "requiredFor": [
+        "e2e"
+      ]
+    }
+  ],
+  "qualityGates": [
+    {
+      "id": "QG-UNIT-001",
+      "name": "Testes de domínio da API",
+      "category": "unit",
+      "command": "npm test",
+      "status": "passed",
+      "summary": "5 testes passaram.",
+      "artifacts": [
+        "apps/api/src/domain.test.ts"
+      ],
+      "supportsCases": [
+        "TC-P0-001",
+        "TC-P1-002",
+        "TC-P1-003"
+      ]
+    },
+    {
+      "id": "QG-BUILD-001",
+      "name": "Build da aplicação",
+      "category": "build",
+      "command": "npm run build",
+      "status": "passed",
+      "summary": "Build da API e da aplicação web concluídos.",
+      "artifacts": [
+        "apps/api/dist",
+        "apps/web/.next"
+      ],
+      "supportsCases": []
+    },
+    {
+      "id": "QG-AUDIT-001",
+      "name": "Auditoria de dependências de produção",
+      "category": "review",
+      "command": "npm audit --omit=dev --audit-level=high",
+      "status": "passed",
+      "summary": "0 vulnerabilidades encontradas nas dependências de produção.",
+      "artifacts": [],
+      "supportsCases": []
+    }
+  ],
+  "cases": [
+    {
+      "id": "TC-P0-001",
+      "title": "已结拍的页面显示已记录的成交结果和凭证",
+      "priority": "P0",
+      "layer": "e2e",
+      "type": "regression",
+      "module": "auction-results",
+      "source": [
+        "d4d915c",
+        "PDF, páginas 2-4",
+        "GET /api/lots, GET /api/lots/:id/bids, GET /api/audit/lots/:id, GET /api/receipts/:token"
+      ],
+      "preconditions": [
+        "存在已结拍且包含持久化出价、买方和凭证的拍品。"
+      ],
+      "steps": [
+        "通过公开 API 动态选择一件有出价且已结拍的拍品。",
+        "打开拍品页面并核对成交价、买方和出价历史。",
+        "打开该拍品的公开凭证和审计页。"
+      ],
+      "expected": [
+        "页面显示的成交价、买方代号和出价历史与公开接口返回值一致。",
+        "凭证中的拍品、买方和成交价与拍品页一致。",
+        "公开审计显示记录完整，结拍事件中的买方和成交价一致。"
+      ],
+      "data": [
+        "通过 API 动态选择包含成交价、买方、凭证和至少一笔出价的已结拍拍品，不固定业务 ID。"
+      ],
+      "automation": "automated",
+      "status": "confirmed",
+      "businessActor": "公开访客",
+      "operationPath": "拍品列表 -> 已结拍详情 -> 成交凭证 -> 公开审计",
+      "businessStateBefore": "拍品已结拍，买方、出价、凭证和审计事件均已持久化。",
+      "businessAction": "查看拍品结果、凭证和公开出价顺序。",
+      "businessStateAfter": "访客在各公开页面看到相同的持久化成交结果。",
+      "businessAssertions": [
+        "成交价和买方与持久化拍品及最高出价一致。",
+        "展示的每笔出价均存在于该拍品的公开出价接口。",
+        "凭证和审计记录指向同一成交结果，且审计完整。"
+      ],
+      "risk": "成交结果不一致可能让用户误判交易金额或买方。",
+      "riskIds": [
+        "RISK-P0-001"
+      ],
+      "tags": [
+        "receipt",
+        "audit",
+        "settlement"
+      ],
+      "owner": "qa",
+      "traceability": [
+        "apps/web/components/app-shell.tsx",
+        "/lots/[id]",
+        "/receipt/[token]",
+        "/audit/[id]"
+      ],
+      "implementation": {},
+      "result": {},
+      "qaReuse": {
+        "action": "new-gap-fill",
+        "matchKey": "case|auctionresults|visitante pblico|vitrine  sala do lote encerrado  comprovante  auditoria"
+      }
+    },
+    {
+      "id": "TC-P1-002",
+      "title": "无出价的已结拍拍品不显示买方",
+      "priority": "P1",
+      "layer": "e2e",
+      "type": "regression",
+      "module": "auction-results",
+      "source": [
+        "d4d915c",
+        "PDF, página 4",
+        "GET /api/lots/:id/bids, GET /api/audit/lots/:id"
+      ],
+      "preconditions": [
+        "存在没有任何持久化出价的已结拍拍品。"
+      ],
+      "steps": [
+        "通过公开 API 动态选择出价列表为空的已结拍拍品。",
+        "打开拍品详情并查看公开审计。"
+      ],
+      "expected": [
+        "详情显示“Sem arremate”和“Este lote foi encerrado sem lances registrados.”。",
+        "不显示邀请访客成为首位出价者的文字、买方、成交价或成交凭证链接。",
+        "审计有效，结拍事件没有买方。"
+      ],
+      "data": [
+        "通过 API 动态选择状态为 closed、出价列表为空且没有凭证的拍品，不固定业务 ID。"
+      ],
+      "automation": "automated",
+      "status": "confirmed",
+      "businessActor": "公开访客",
+      "operationPath": "公开列表 -> 无出价的已结拍详情 -> 审计",
+      "businessStateBefore": "拍品已经结拍且没有出价。",
+      "businessAction": "查看拍品结拍结果及公开审计。",
+      "businessStateAfter": "拍品保持无买方、无成交价、无成交凭证。",
+      "businessAssertions": [
+        "显示无出价结拍文案。",
+        "不出现虚构买方、出价或成交信息。",
+        "审计链保持有效。"
+      ],
+      "risk": "页面可能错误显示买方，或提示访客对已结拍拍品出价。",
+      "riskIds": [
+        "RISK-P1-002"
+      ],
+      "tags": [
+        "closed",
+        "empty-state",
+        "audit"
+      ],
+      "owner": "qa",
+      "traceability": [
+        "apps/web/components/app-shell.tsx",
+        "/lots/[id]",
+        "/audit/[id]"
+      ],
+      "implementation": {},
+      "result": {},
+      "qaReuse": {
+        "action": "new-gap-fill",
+        "matchKey": "case|auctionresults|visitante pblico|vitrine  lote encerrado sem lances  auditoria"
+      }
+    },
+    {
+      "id": "TC-P1-003",
+      "title": "有出价的在线拍品显示已记录的出价流",
+      "priority": "P1",
+      "layer": "e2e",
+      "type": "regression",
+      "module": "auction-results",
+      "source": [
+        "d4d915c",
+        "PDF, páginas 3-4",
+        "GET /api/lots, GET /api/lots/:id/bids"
+      ],
+      "preconditions": [
+        "存在至少有一笔持久化出价的在线拍品。"
+      ],
+      "steps": [
+        "通过公开 API 动态选择有出价的在线拍品。",
+        "打开拍品详情并核对当前价、领先者、数量和出价流。"
+      ],
+      "expected": [
+        "页面显示在线状态及“Tempo real”出价数量，数量与接口一致。",
+        "当前价和领先者与最新持久化出价一致。",
+        "页面中的每笔出价都对应该拍品接口返回的记录。"
+      ],
+      "data": [
+        "通过 API 动态选择状态为 live 且出价数量大于零的拍品，不固定业务 ID。"
+      ],
+      "automation": "automated",
+      "status": "confirmed",
+      "businessActor": "公开访客",
+      "operationPath": "公开列表 -> 在线拍品详情 -> 出价流",
+      "businessStateBefore": "拍品正在竞价，已有持久化出价。",
+      "businessAction": "查看在线拍品及其出价历史。",
+      "businessStateAfter": "详情页反映该拍品已记录的出价。",
+      "businessAssertions": [
+        "出价流数量与接口记录数一致。",
+        "领先者和当前价与按时间倒序的第一笔出价一致。",
+        "页面没有接口中不存在的出价。"
+      ],
+      "risk": "出价流不一致可能使访客误判竞价进度或领先者。",
+      "riskIds": [
+        "RISK-P1-003"
+      ],
+      "tags": [
+        "live",
+        "stream"
+      ],
+      "owner": "qa",
+      "traceability": [
+        "apps/web/components/app-shell.tsx",
+        "/lots/[id]",
+        "/api/lots/:id/bids"
+      ],
+      "implementation": {},
+      "result": {},
+      "qaReuse": {
+        "action": "new-gap-fill",
+        "matchKey": "case|auctionresults|visitante pblico|vitrine  sala ao vivo  stream de lances"
+      }
+    },
+    {
+      "id": "TC-P1-004",
+      "title": "无出价的在线拍品等待第一笔出价",
+      "priority": "P1",
+      "layer": "e2e",
+      "type": "regression",
+      "module": "auction-results",
+      "source": [
+        "d4d915c",
+        "Requisito explícito da solicitação",
+        "apps/web/components/app-shell.tsx:1819-1828"
+      ],
+      "preconditions": [
+        "浏览器中的拍品接口被模拟为 live，当前价为空且出价列表为空。"
+      ],
+      "steps": [
+        "仅在浏览器中拦截测试拍品的读取请求，并返回 live 状态和空出价列表。",
+        "打开该模拟拍品的详情页。"
+      ],
+      "expected": [
+        "详情显示“Aguardando o primeiro lance neste pregão ao vivo.”。",
+        "出价历史显示零笔，不显示出价流、买方、领先者或成交金额。",
+        "浏览器没有向生产后端发送任何写入请求。"
+      ],
+      "data": [
+        "只在 Playwright 浏览器中使用模拟网络响应；不向生产数据库写入拍品或出价。"
+      ],
+      "automation": "automated",
+      "status": "confirmed",
+      "businessActor": "公开访客",
+      "operationPath": "无出价的在线拍品 -> 等待首笔出价",
+      "businessStateBefore": "在线拍品尚无持久化出价。",
+      "businessAction": "打开拍品详情查看竞价状态。",
+      "businessStateAfter": "页面等待首笔出价，不编造竞价活动。",
+      "businessAssertions": [
+        "显示正确的等待文案。",
+        "出价数为零，且没有出价流、领先者、成交结果或远程写入。"
+      ],
+      "risk": "空场竞价页面可能出现虚构活动或错误状态提示。",
+      "riskIds": [
+        "RISK-P1-004"
+      ],
+      "tags": [
+        "live",
+        "empty-state",
+        "mocked-fixture"
+      ],
+      "owner": "qa",
+      "traceability": [
+        "apps/web/components/app-shell.tsx",
+        "/lots/[id]"
+      ],
+      "implementation": {},
+      "result": {},
+      "qaReuse": {
+        "action": "new-gap-fill",
+        "matchKey": "case|auctionresults|visitante pblico|sala ao vivo sem lances  estado de espera"
+      }
+    }
+  ],
+  "reuseReport": {
+    "reused": [],
+    "added": [
+      {
+        "caseId": "TC-P0-001",
+        "title": "Lote encerrado mostra o arremate registrado e seu comprovante"
+      },
+      {
+        "caseId": "TC-P1-002",
+        "title": "Lote encerrado sem lances não apresenta arrematante"
+      },
+      {
+        "caseId": "TC-P1-003",
+        "title": "Lote ao vivo mostra o stream de lances registrados"
+      },
+      {
+        "caseId": "TC-P1-004",
+        "title": "Lote ao vivo sem lances aguarda a primeira oferta"
+      }
+    ]
+  }
+}

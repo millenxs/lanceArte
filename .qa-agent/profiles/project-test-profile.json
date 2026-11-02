@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "generatedAt": "2026-11-02T08:16:29+08:00",
+  "suites": [],
+  "commands": {
+    "unit": [],
+    "api": [],
+    "integration": [],
+    "e2e": [],
+    "review": []
+  }
+}
