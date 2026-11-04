@@ -2,6 +2,24 @@ import { createHash } from 'node:crypto';
 
 export type BidDecision = { accepted: true; nextEndAt: Date } | { accepted: false; reason: string };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
+export function lotScheduleError(startsAt: Date, endsAt: Date, now = new Date()): string | null {
+  if (
+    !Number.isFinite(startsAt.getTime()) ||
+    !Number.isFinite(endsAt.getTime()) ||
+    startsAt <= now ||
+    endsAt <= startsAt
+  ) {
+    return 'O início do lote precisa estar no futuro, e o encerramento deve ser posterior ao início.';
+  }
+  return null;
+}
+
 export function evaluateBid(input: {
   status: string;
   startsAt: Date;

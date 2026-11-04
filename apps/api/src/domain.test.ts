@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { auditIsValid, auditMatchesCheckpoint, createRateLimiter, evaluateBid, hashAuditEvent } from './domain.js';
+import { auditIsValid, auditMatchesCheckpoint, createRateLimiter, evaluateBid, hashAuditEvent, isUuid, lotScheduleError } from './domain.js';
 
 const base = {
   status: 'live', startsAt: new Date('2026-01-01T10:00:00Z'), endsAt: new Date('2026-01-01T11:00:00Z'),
@@ -8,6 +8,17 @@ const base = {
   minimumIncrementCents: 500, currentLeaderId: null, bidderId: 'bidder-1', availableCents: 10000,
   sellerId: 'seller', amountCents: 5000
 };
+
+test('validates lot IDs and rejects invalid or past schedules', () => {
+  assert.equal(isUuid('b8d5f7c7-8fd5-49f4-a1f8-b9e48e734e10'), true);
+  assert.equal(isUuid('not-a-lot-id'), false);
+
+  const now = new Date('2026-01-01T10:00:00Z');
+  assert.equal(lotScheduleError(new Date('invalid'), new Date('2026-01-01T12:00:00Z'), now) !== null, true);
+  assert.equal(lotScheduleError(new Date('2026-01-01T09:00:00Z'), new Date('2026-01-01T12:00:00Z'), now) !== null, true);
+  assert.equal(lotScheduleError(new Date('2026-01-01T11:00:00Z'), new Date('2026-01-01T10:30:00Z'), now) !== null, true);
+  assert.equal(lotScheduleError(new Date('2026-01-01T11:00:00Z'), new Date('2026-01-01T12:00:00Z'), now), null);
+});
 
 test('accepts a valid opening bid and reserves the correct minimum', () => {
   assert.equal(evaluateBid(base).accepted, true);

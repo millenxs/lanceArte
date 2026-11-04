@@ -1,6 +1,6 @@
 # LanceArte
 
-Casa de leilões de obras de arte, criada para o teste técnico Elite Dev da Verzel. O projeto usa Next.js e TypeScript na interface, Fastify e Socket.IO na API, PostgreSQL para persistência e catálogos do Art Institute of Chicago, Projeto Portinari e LACMA para descobrir obras.
+Casa de leilões de obras de arte, criada para o teste técnico Elite Dev da Verzel. O projeto usa Next.js e TypeScript na interface, Fastify e Socket.IO na API, PostgreSQL para persistência e os catálogos do Art Institute of Chicago e do Projeto Portinari para descobrir obras.
 
 ## Funcionalidades
 
@@ -24,9 +24,14 @@ flowchart LR
     WEB -->|REST por proxy /api| API[Fastify: regras e liquidação]
     WEB <-->|Socket.IO: lances e estado| API
     API --> DB[(PostgreSQL: lotes, lances, carteira e auditoria)]
-    API -->|Busca ao criar lote| AIC[API do Art Institute of Chicago]
+    API -->|Busca ao criar lote| AIC[Art Institute of Chicago]
+    API -->|Busca ao criar lote| PORT[Projeto Portinari]
     WEB -->|Auditoria e comprovante públicos| API
 ```
+
+No frontend, `app-shell.tsx` coordena o fluxo; as telas ficam em `components/views/`, com tipos, cliente HTTP e formatadores em módulos próprios. O CSS é dividido por área visual e responsividade, importado pelo layout na ordem da cascata.
+
+No backend, `server.ts` configura Fastify e Socket.IO e registra rotas separadas para autenticação, catálogos, lotes, carteira e auditoria/comprovantes. Sessões e regras/consultas de lote ficam em módulos de serviço; `domain.ts` concentra as regras puras de lance, agendamento e auditoria.
 
 ## Executar localmente
 
@@ -95,7 +100,8 @@ Depois do primeiro deploy, confirme que `/health` da API responde e que a URL da
 
 ## Decisões e limites conhecidos
 
-- Os catálogos externos são consultados ao pesquisar e criar lotes. O retrato do item fica salvo localmente; a vitrine e os lotes existentes não dependem de nova consulta aos museus.
+- Os catálogos do Art Institute of Chicago e do Projeto Portinari são consultados ao pesquisar e criar lotes. O retrato do item fica salvo localmente; a vitrine e os lotes existentes não dependem de nova consulta aos museus.
+- O lote LACMA que acompanha a demonstração é um retrato histórico de seed, não um catálogo pesquisável; a busca não oferece dados estáticos ou resultados inventados para esse acervo.
 - Senhas são verificadas com scrypt e nunca armazenadas em texto puro. Sessões usam cookie `HttpOnly`.
 - A carteira, depósitos e liquidação servem apenas para demonstrar regras de negócio.
 - Os eventos de auditoria são append-only no PostgreSQL e formam uma cadeia SHA-256 por lote. A página pública recalcula essa cadeia e detecta divergências nos registros apresentados.

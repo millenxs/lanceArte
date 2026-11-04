@@ -1,7 +1,8 @@
 const origin = process.env.QA_WEB_BASE_URL || 'https://lancearte.vercel.app';
+const apiOrigin = process.env.QA_API_BASE_URL || origin;
 
 async function getJson(request, path) {
-  const response = await request.get(new URL(path, origin).toString());
+  const response = await request.get(new URL(path, apiOrigin).toString());
   if (!response.ok()) throw new Error(`${path} deve responder com sucesso; status ${response.status()}`);
   return response.json();
 }
