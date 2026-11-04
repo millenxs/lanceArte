@@ -8,3 +8,9 @@ dist/
 coverage/
 *.log
 .neon
+
+# Local agent skills and their installation manifest
+.agents/skills/
+.claude/skills/
+.github/skills/
+skills-lock.json
